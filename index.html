@@ -23,7 +23,8 @@ const W = 540, H = 960, CS = 60, COLS = 9, ROWS = 13, GY = 60, PY = GY + ROWS * 
 const INK = '#3b2410';
 const FONT = 'bold {s}px "Trebuchet MS","Arial Rounded MT Bold",Verdana,sans-serif';
 const cv = document.getElementById('c');
-const ctx = cv.getContext('2d');
+// ctx is swapped to an offscreen canvas while a level's ground is painted
+let ctx = cv.getContext('2d');
 let sc = 1, ox = 0, oy = 0, dpr = 1;
 function resize() {
   dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -36,11 +37,13 @@ const pick = a => a[(Math.random() * a.length) | 0];
 
 // ---------- save ----------
 const SAVE_KEY = 'kaninvaktarna-v1';
-let save = { stars: [0, 0, 0, 0, 0], muted: false, seen: {}, story: false, rabbits: null, run: null };
+let save = { stars: [0, 0, 0, 0, 0], muted: false, seen: {}, story: false, rabbits: null, run: null, auto: true };
 try {
   const s = JSON.parse(localStorage.getItem(SAVE_KEY));
   if (s && Array.isArray(s.stars)) save = Object.assign(save, s);
 } catch (e) {}
+// a lost game must never come back as a run to continue
+if (save.run && !(save.run.lives > 0)) save.run = null;
 if (!Array.isArray(save.rabbits)) {
   // older saves unlocked rabbits by clearing levels
   save.rabbits = [0, 1];
@@ -72,19 +75,21 @@ function sfx(f, d = .08, type = 'square', vol = .04, slide = 0, key) {
 // ---------- data ----------
 // enemy hp = base * (1 + wave * m + late * max(0, m - lateFrom)^2) * level[lv] with m = wave number - 1,
 // so the first waves stay gentle and the long levels get steep towards the end;
-// wave n holds min(cap, count0 + countN * (n - 1) + 2 * lv) balloons; boss hp = boss * hpk * the same scale
+// wave n holds min(cap, count0 + countN * (n - 1) + 2 * lv) minions; boss hp = boss * hpk * the same scale
 const BAL = {
-  // tuned with a bot that builds counters and spends everything: it keeps 8 / 13 / 17 / 12 / 6 carrots on levels 1-5
-  wave: .2, late: .03, lateFrom: 14, level: [.85, 1.5, 1.95, 1.8, 1.9], count0: 8, countN: 1.2, cap: 42, segHp: 1.15, platHp: 1,
-  boss: 200, bossLeak: 10, startGold: [130, 300, 380, 460, 540], moveCost: .3, rangeCost: .5,
+  // tuned with a bot that builds counters, uses its hero and spends everything; tower limits cap the defence,
+  // so the late waves decide each level: the bot keeps 33 / 9 / 9 / 15 / 3 carrots of 40 on levels 1-5
+  wave: .2, late: .03, lateFrom: 14, level: [.9, 1.35, 1.95, 1.95, .9], count0: 10, countN: 1.5, cap: 80, segHp: 1.15, platHp: 1,
+  boss: 200, bossLeak: 12, startGold: [130, 300, 380, 460, 540], moveCost: .3, rangeCost: .5,
+  lives: 40, waveBonus: 10, waveBonusN: 1,
 };
-const DNAME = { sharp: 'VASS', boom: 'SPRÄNG', ice: 'IS', sun: 'SOL' };
+const DNAME = { sharp: 'VASS', boom: 'SPRÄNG', ice: 'IS', sun: 'SOL', heart: 'HJÄRTA', smash: 'KROSS', true: 'STJÄRNA' };
 const MODES = ['first', 'strong', 'close'];
 const MODE_NAME = { first: 'FÖRST', strong: 'STARKAST', close: 'NÄRMAST' };
 const RANGE_UP = 2.5 * CS;
-// unlockBy = the forest boss that hands the rabbit over (start rabbits have none)
+// unlockBy = the forest boss that hands the rabbit over (start rabbits have none); max = how many may stand on a level
 const RABBITS = [
-  { name: 'PILKANIN', short: 'PIL', cost: 60, fur: '#e8c49a', dtype: 'sharp',
+  { name: 'PILKANIN', short: 'PIL', cost: 60, max: 5, fur: '#e8c49a', dtype: 'sharp',
     desc: 'Kastar vassa pilar. Biter på gummi!',
     base: { range: 110, cd: .6, dmg: 9, pierce: 1, count: 1, proj: 470 },
     ups: [
@@ -92,15 +97,15 @@ const RABBITS = [
       { name: 'Trippelpil', desc: 'Kastar 3 pilar samtidigt', cost: 120, f: s => { s.count = 3; } },
       { name: 'Örnöga', desc: 'Ser osynliga, +25% räckvidd', cost: 170, f: s => { s.camo = true; s.range *= 1.25; } },
     ] },
-  { name: 'ISKANIN', short: 'IS', cost: 80, fur: '#ffffff', dtype: 'ice',
-    desc: 'Snöbollar som saktar ner alla ballonger.',
+  { name: 'ISKANIN', short: 'IS', cost: 80, max: 3, fur: '#ffffff', dtype: 'ice',
+    desc: 'Snöbollar som saktar ner alla minions.',
     base: { range: 100, cd: .9, dmg: 3, pierce: 1, count: 1, proj: 380, slow: .4 },
     ups: [
       { name: 'Kallare snö', desc: 'Saktar ner ännu mer', cost: 60, f: s => { s.slow = .6; s.dmg *= 1.5; } },
       { name: 'Snöstorm', desc: 'Träffar ett helt område', cost: 130, f: s => { s.splash = 50; } },
-      { name: 'Djupfrysning', desc: 'Fryser fast ballonger', cost: 190, f: s => { s.stun = .7; s.cd *= .8; } },
+      { name: 'Djupfrysning', desc: 'Fryser fast minions', cost: 190, f: s => { s.stun = .7; s.cd *= .8; } },
     ] },
-  { name: 'BOMBKANIN', short: 'BOMB', cost: 120, fur: '#b4b4c4', dtype: 'boom', unlockBy: 'krax',
+  { name: 'BOMBKANIN', short: 'BOMB', cost: 120, max: 4, fur: '#b4b4c4', dtype: 'boom', unlockBy: 'krax',
     desc: 'Morotsbomber som smäller. Enda som biter på plåt!',
     base: { range: 115, cd: 1.4, dmg: 20, pierce: 1, count: 1, proj: 320, splash: 50 },
     ups: [
@@ -108,15 +113,15 @@ const RABBITS = [
       { name: 'Snabbladdning', desc: 'Kastar mycket oftare', cost: 150, f: s => { s.cd *= .62; } },
       { name: 'Megamorot', desc: 'Dubbel skada', cost: 230, f: s => { s.dmg *= 2; } },
     ] },
-  { name: 'SPEJARKANIN', short: 'SPEJARE', cost: 90, fur: '#d9a066', dtype: 'sharp', unlockBy: 'gunnar',
-    desc: 'Ser osynliga ballonger. Kaniner nära henne ser dem också!',
+  { name: 'SPEJARKANIN', short: 'SPEJARE', cost: 90, max: 3, fur: '#d9a066', dtype: 'sharp', unlockBy: 'gunnar',
+    desc: 'Ser osynliga minions. Kaniner nära henne ser dem också!',
     base: { range: 125, cd: 1.05, dmg: 8, pierce: 3, count: 1, proj: 420, camo: true, aura: true },
     ups: [
       { name: 'Längre kikare', desc: '+25% räckvidd och syn', cost: 70, f: s => { s.range *= 1.25; } },
       { name: 'Dubbelbumerang', desc: '2 bumeranger, +40% skada', cost: 140, f: s => { s.count = 2; s.dmg *= 1.4; } },
       { name: 'Avslöja', desc: 'Tar bort osynligheten', cost: 200, f: s => { s.strip = true; } },
     ] },
-  { name: 'ODLARKANIN', short: 'ODLARE', cost: 110, fur: '#b07a4a', dtype: null, unlockBy: 'majken',
+  { name: 'ODLARKANIN', short: 'ODLARE', cost: 110, max: 2, fur: '#b07a4a', dtype: null, unlockBy: 'majken',
     desc: 'Odlar morotsmynt efter varje våg.',
     base: { range: 0, income: 30 },
     ups: [
@@ -124,35 +129,90 @@ const RABBITS = [
       { name: 'Vattenkanna', desc: 'Ger 75 per våg', cost: 140, f: s => { s.income = 75; } },
       { name: 'Guldmorötter', desc: 'Ger 110 per våg', cost: 210, f: s => { s.income = 110; } },
     ] },
-  { name: 'SOLKANIN', short: 'SOL', cost: 170, fur: '#ffe2a8', dtype: 'sun', unlockBy: 'ugo',
-    desc: 'Bränner ballonger med solljus och en spegel.',
+  { name: 'SOLKANIN', short: 'SOL', cost: 170, max: 3, fur: '#ffe2a8', dtype: 'sun', unlockBy: 'ugo',
+    desc: 'Bränner minions med solljus och en spegel.',
     base: { range: 130, cd: .1, dmg: 3, beam: true, chain: 1 },
     ups: [
       { name: 'Större spegel', desc: '+60% skada', cost: 130, f: s => { s.dmg *= 1.6; } },
       { name: 'Brännglas', desc: '+25% räckvidd', cost: 150, f: s => { s.range *= 1.25; } },
-      { name: 'Dubbelstråle', desc: 'Träffar 2 ballonger', cost: 270, f: s => { s.chain = 2; } },
+      { name: 'Dubbelstråle', desc: 'Träffar 2 minions', cost: 270, f: s => { s.chain = 2; } },
     ] },
 ];
+// minions are balloon soldiers with little feet; gear is what they wear
 const KINDS = {
-  r: { name: 'RÖD',  hp: 18, sp: 55,  r: 12, gold: 3, color: '#ff4d4d' },
-  y: { name: 'GUL',  hp: 12, sp: 100, r: 10, gold: 3, color: '#ffd93b' },
-  b: { name: 'BLÅ',  hp: 38, sp: 45,  r: 15, gold: 6, color: '#4d8dff' },
-  k: { name: 'KLAS', hp: 55, sp: 42,  r: 17, gold: 6, color: '#ff7ad9', split: 3 },
+  r: { name: 'SVÄRDMINION',  hp: 18, sp: 55,  r: 12, gold: 3, color: '#ff4d4d', gear: 'sword' },
+  y: { name: 'SPRINTMINION', hp: 12, sp: 100, r: 10, gold: 3, color: '#ffd93b', gear: 'band' },
+  b: { name: 'TANKMINION',   hp: 38, sp: 45,  r: 15, gold: 5, color: '#4d8dff', gear: 'horns' },
+  k: { name: 'KLANMINION',   hp: 55, sp: 42,  r: 17, gold: 5, color: '#ff7ad9', gear: 'kids', split: 3 },
 };
 const TIPS = {
-  y:    { title: 'GUL BALLONG', spec: 'y', good: [0, 1], joke: 'Den har druckit alldeles för mycket saft.',
+  y:    { title: 'SPRINTMINION', spec: 'y', good: [0, 1], joke: 'Den har druckit alldeles för mycket saft.',
           text: 'Supersnabb! Ställ kaniner tidigt längs stigen, eller sakta ner den med snö.' },
-  b:    { title: 'BLÅ BALLONG', spec: 'b', good: [0, 2], joke: 'Den har ätit för många blåbär.',
+  b:    { title: 'TANKMINION', spec: 'b', good: [0, 2], joke: 'Hjälmen är för stor. Den ser ingenting.',
           text: 'Tjock och svår att få hål på. Uppgradera dina kaniner!' },
-  k:    { title: 'KLASBALLONG', spec: 'k', good: [2, 1], joke: 'Det är en hel familj. Typ.',
-          text: 'När den spricker kommer 3 små röda ut. Ha fler kaniner längre fram på stigen!' },
-  seg:  { title: 'GUMMIBALLONG', spec: 'r+seg', good: [0, 3], joke: 'Gjord av gamla gummistövlar. Luktar också så.',
-          text: 'Allt studsar av utom VASSA saker. Snöbollar och bomber biter inte!' },
-  plat: { title: 'PLÅTBALLONG', spec: 'b+plat', good: [2], joke: 'Mården Majken putsar den varje morgon.',
-          text: 'Gjord av plåt! Bara EXPLOSIONER kan spräcka den.' },
-  camo: { title: 'OSYNLIG BALLONG', spec: 'r+camo', good: [3, 0], joke: 'Den har solglasögon. Det hjälper tydligen.',
+  k:    { title: 'KLANMINION', spec: 'k', good: [2, 1], joke: 'Den bär sina barn på huvudet. Hela tiden.',
+          text: 'När den spricker springer 3 små svärdminions ut. Ha fler kaniner längre fram på stigen!' },
+  seg:  { title: 'GUMMIMINION', spec: 'r+seg', good: [0, 3], joke: 'Gjord av gamla gummistövlar. Luktar också så.',
+          text: 'Allt studsar av utom VASSA saker och hjärtan. Snöbollar och bomber biter inte!' },
+  plat: { title: 'PLÅTMINION', spec: 'b+plat', good: [2], joke: 'Mården Majken putsar den varje morgon.',
+          text: 'Gjord av plåt! Bara EXPLOSIONER och krossar kan spräcka den. Plåt har inget hjärta.' },
+  camo: { title: 'OSYNLIG MINION', spec: 'r+camo', good: [3, 0], joke: 'Den har solglasögon. Det hjälper tydligen.',
           text: 'Syns bara för kaniner med kikare. Kaniner nära en Spejarkanin ser den också. Pilkanin ser den efter Örnöga.' },
 };
+// heroes: one per level, chosen before the first wave; they level up from pops nearby and have two abilities
+const HEROES = {
+  linnea: { name: 'LINNÉA', title: 'Hjärtmagikern', unlock: null, dtype: 'heart', color: '#ff5fa2',
+    desc: 'Skjuter hjärtan som knuffar minions bakåt. Plåt har inget hjärta, så den biter inte.',
+    base: { range: 135, cd: .55, dmg: 7, proj: 430, knock: 16 },
+    q: { name: 'HJÄRTBUMERANG', short: 'BUMERANG', desc: 'Ett jättehjärta flyger ut och tillbaka och knuffar alla det träffar.', cd: 10 },
+    r: { name: 'FÖRTJUSNING', short: 'FÖRTJUST', desc: 'Alla minions nära blir kära och går baklänges.', cd: 40 },
+    lines: {
+      pick: ['Hjärtan är också vapen!', 'Kärlek övervinner allt. Särskilt ballonger.', 'Dags att sprida lite kärlek. Hårt.'],
+      lvl: ['Jag blir starkare!', 'Ny nivå! Mitt hår är fortfarande perfekt.', 'Mer kärlek, mer pop!'],
+      q: ['Kom tillbaka, hjärtat!', 'Vi ses igen, hjärtat!', 'Bumerang!'],
+      r: ['Bli kär och gå hem!', 'Ingen kan motstå mig!', 'Alla älskar Linnéa!'],
+      multi: ['Hjärtekrossare!', 'Det där var ju lätt!', 'Kärlek gör ont ibland.'],
+      move: ['Här ser jag allt!', 'Ny plats, samma charm.', 'Hopp hopp!'],
+    } },
+  torsten: { name: 'TORSTEN', title: 'Hammarvakten', unlock: 0, dtype: 'smash', color: '#5aa84a',
+    desc: 'Krossar allt nära sig med sin hammare, även plåt. Gummi studsar bara.',
+    base: { range: 90, cd: 1.1, dmg: 16, melee: true, splash: 48, stun: .25 },
+    q: { name: 'MARKSKALV', short: 'SKALV', desc: 'Slår i marken. Alla nära blir yra och står still.', cd: 12 },
+    r: { name: 'JÄTTESMASH', short: 'SMASH', desc: 'Ett jätteslag som slänger iväg alla runt honom.', cd: 45 },
+    lines: {
+      pick: ['Torsten är här. Och hammaren.', 'Hammaren heter Hilda.', 'Jag gillar inte ballonger. De låter konstigt.'],
+      lvl: ['Torsten starkare!', 'Hilda blev tyngre!', 'Mer muskler!'],
+      q: ['DUNS!', 'Marken skakar!', 'Stå still!'],
+      r: ['HILDAAA!', 'JÄTTESMASH!', 'Hejdå allihop!'],
+      multi: ['Hilda är glad!', 'Bonk bonk bonk!', 'Det var en bra smäll.'],
+      move: ['Torsten flyttar.', 'Hilda vill stå här.', 'Bra plats.'],
+    } },
+  maja: { name: 'MAJA', title: 'Månskytten', unlock: 2, dtype: 'sharp', color: '#7d8cff',
+    desc: 'Långa månpilar som går igenom flera. Ser alltid osynliga minions.',
+    base: { range: 180, cd: .8, dmg: 10, proj: 620, pierce: 3, camo: true },
+    q: { name: 'MÅNSKEN', short: 'MÅNSKEN', desc: 'Lyser upp allt nära. Osynliga syns och alla saktar ner.', cd: 12 },
+    r: { name: 'STJÄRNREGN', short: 'STJÄRNOR', desc: 'Tolv stjärnor faller på de starkaste. Biter på allt.', cd: 45 },
+    lines: {
+      pick: ['Månen visar vägen.', 'Jag ser dig. Ja, dig.', 'Inga gömställen i natt.'],
+      lvl: ['Månen växer!', 'Skarpare sikte!', 'Stjärnorna lyssnar.'],
+      q: ['Ljus på!', 'Där är ni ju!', 'Månsken!'],
+      r: ['Önska nåt!', 'Stjärnregn!', 'Titta upp!'],
+      multi: ['Rakt i prick!', 'Som stjärnfall.', 'En pil, många pop.'],
+      move: ['Bättre utsikt.', 'Här ser jag längre.', 'Tyst som natten.'],
+    } },
+};
+const HERO_KEYS = ['linnea', 'torsten', 'maja'];
+const heroUnlocked = k => HEROES[k].unlock == null || save.stars[HEROES[k].unlock] > 0;
+// items: bought for the hero with coins, kept until the level ends
+const ITEMS = [
+  { key: 'staff', name: 'MOROTSSTAV', desc: '+40% skada', cost: 220, f: s => { s.dmg *= 1.4; } },
+  { key: 'shoes', name: 'SNABBSKOR', desc: '+35% fart', cost: 240, f: s => { s.cd /= 1.35; } },
+  { key: 'goggles', name: 'UGGLEGLASÖGON', desc: 'Ser osynliga', cost: 160, f: s => { s.camo = true; } },
+  { key: 'glass', name: 'TIMGLAS', desc: 'Snabbare förmågor', cost: 260, f: s => { s.cdr = .7; } },
+];
+const HERO_MAX = 10, ULT_LVL = 6;
+const xpNeed = l => 14 + l * 10;
+const MULTI = ['', '', 'DUBBELPOP!', 'TRIPPELPOP!', 'KVADRAPOP!', 'PENTAPOP!'];
 // hpk scales boss hp; finals of a place are tougher than the henchmen on the way
 const BOSSES = {
   krax: { name: 'KRÅKAN KRAX', short: 'KRAX', animal: 'crow', color: '#3a3f55', sp: 34, hpk: .8, props: {}, ability: 'dash', weak: 'sharp', gold: 120,
@@ -190,7 +250,7 @@ const LINES = {
     ['Pilar laddade!', 'Jag siktar på allt rött.', 'Vem tog min morot?!'],
     ['Snöbollskrig!', 'Brrr, nu blir det kallt.', 'Kyla är min superkraft.'],
     ['BOM tycker jag om.', 'Hörselkåporna på!', 'Det kommer smälla. Mycket.'],
-    ['Jag ser dig, ballong...', 'Kikaren är putsad.', 'Inget gömmer sig för mig!'],
+    ['Jag ser dig, minion...', 'Kikaren är putsad.', 'Inget gömmer sig för mig!'],
     ['Morötter växer inte på träd.', 'Jag odlar, ni poppar.', 'Vattna, vänta, vinst!'],
     ['Solkräm? Aldrig hört talas om.', 'Spegel, spegel på väggen...', 'Nu blir det varmt!'],
   ],
@@ -200,17 +260,87 @@ const LINES = {
   leak: ['Min morot!!', 'Neeej, inte den!', 'Stoppa tjuven!', 'Den hade min lunch!', 'Kom tillbaka med den!'],
   clear: ['Hipp hipp hurra!', 'Lätt som en morot!', 'Vem är bäst? Vi!', 'Pop pop hurra!', 'Var det allt?'],
   idle: ['Är det lunch snart?', 'Har nån sett min andra socka?', 'Mina öron kliar.', 'Jag är inte rädd. Öronen darrar bara.',
-    'Är det en fågel? Nej, en BALLONG!', 'Tänk om ballongerna är snälla...? Nä.', 'Jag borde ha tagit med en morot.'],
+    'Är det en fågel? Nej, en MINION!', 'Tänk om minionerna är snälla...? Nä.', 'Linnéa, kan du lära mig skjuta hjärtan?', 'Jag borde ha tagit med en morot.'],
   imm: ['Den studsar ju!', 'Vad är den gjord av?!', 'Orättvist!', 'Hjälp, den biter inte!'],
+  full: ['Vi är redan för många här!', 'Det finns inte fler mössor.', 'Nej tack, vi är fullbokade.'],
 };
+// each place has a guardian rabbit who chats with the hero and the villains between waves
+const GUARDS = [
+  { name: 'FARFAR FLUFF', type: 4 }, { name: 'BADVAKTEN BOSSE', type: 1 }, { name: 'DOKTOR KANTARELL', type: 3 },
+  { name: 'BERGIS', type: 0 }, { name: 'DROTTNING HOPPLA', type: 5 },
+];
+// story beats per level: wave -> lines shown before that wave; who = 'hero', 'guard' or a boss key; {hero} = the hero's name
+const BEATS = [
+  {
+    1: [['guard', 'Va? Ballonger? I min glänta? Jag trodde det var kalas!'], ['hero', 'Det är minions, Farfar. Rufus har skickat dem.'], ['guard', 'Minions? Är det en sorts sallad?']],
+    5: [['guard', '{hero}, jag har räknat morötterna två gånger. Det blev olika varje gång.'], ['hero', 'Det är för att minionerna tar dem!']],
+    10: [['krax', 'Krax! Jag ser nåt glänsande i gläntan!'], ['guard', 'Det är mina glasögon! Rör dem inte!']],
+    15: [['guard', 'När jag var ung poppade vi ballonger med bara tänderna.'], ['hero', 'Farfar, du har inga tänder.'], ['guard', 'Precis. Så tufft var det.']],
+    20: [['gunnar', 'Zzz... va? Är det min tur? Okej. Gräv, gräv...']],
+    25: [['hero', 'Varför har minionerna solglasögon?'], ['guard', 'De tror att de är coola. De har fel.']],
+    30: [['majken', 'Jag har putsat min plåt! Ni får inte spegla er i den!']],
+    35: [['guard', 'Ugglan Ugo har lovat att komma. Han är alltid sen. Han sover på dagen.']],
+    40: [['ugo', 'Hoo-hoo! Jag är inte sen. Jag är strategiskt försenad.']],
+    45: [['rufus', 'Fem vågor kvar, kaniner! Sen blir gläntan MIN!'], ['hero', 'Sen är den fortfarande vår, Rufus.']],
+    50: [['rufus', 'Okej, nu kommer jag själv. Men bara för att alla andra är fega!'], ['guard', 'Ska jag hämta käppen?'], ['hero', 'Sitt kvar, Farfar. Jag tar honom.']],
+  },
+  {
+    1: [['guard', 'PRRRT! Ingen spring vid vattnet! Det gäller minions också!'], ['hero', 'De lyssnar inte, Bosse.'], ['guard', 'Då blåser jag högre. PRRRRRT!']],
+    6: [['guard', 'Plåtminions kan inte simma. Jag har kollat. De sjönk som... plåt.']],
+    10: [['krax', 'Krax! Jag vill bara dricka lite vatten. Och ta alla morötter.']],
+    14: [['hero', 'Bosse, varför har du simfötter på dig?'], ['guard', 'Ifall att. Man vet aldrig.']],
+    20: [['majken', 'Vera vill att jag plåtar in hela sjön. Det blir ett plåtdike!']],
+    25: [['guard', 'Vet du varför minions aldrig badar? De är rädda för att bli blöta ballonger.']],
+    30: [['gunnar', 'Zzz... är vattnet varmt? Då tar jag en tupplur i det.']],
+    35: [['vera', 'Mina 4 000 burkar är redo. Hela vattenhålet ska på burk!'], ['guard', 'Det låter inte alls hälsosamt!']],
+    40: [['vera', 'Nu kommer jag! Med en burköppnare som backup.'], ['hero', 'Okej Vera. Nu sätter vi på locket.']],
+  },
+  {
+    1: [['guard', 'Psst, {hero}. Dimman har öron. Och svampar. Mest svampar.']],
+    5: [['guard', 'De osynliga minionerna är här. Jag ser dem inte. Vilket bevisar det!'], ['hero', 'Det bevisar ingenting, doktorn.']],
+    10: [['gunnar', 'Jag grävde fel och hamnade här. Men nu när jag är här... gräv, gräv!']],
+    15: [['hero', 'Doktorn, kan man äta den där svampen?'], ['guard', 'Alla svampar kan ätas. Vissa bara en gång.']],
+    20: [['ugo', 'Hoo! I dimman är jag kung! Eller uggla. Kunguggla.']],
+    25: [['guard', 'Jag har uppfunnit glasögon som ser osynliga saker. De är osynliga också. Jag hittar dem inte.']],
+    30: [['majken', 'Hallå? Var är alla? Dimman förstör min frisyr!']],
+    35: [['lova', 'Ni ser mig inte... och nu ser ni mig inte igen...'], ['hero', 'Vi ser dig, Lova. Du står bakom en svamp.']],
+    40: [['lova', 'Okej, jag kommer fram. Men bara för att jag har gått vilse.']],
+  },
+  {
+    1: [['guard', 'Hej {hero}! Titta inte ner. Jag tittade ner en gång. Är fortfarande inte okej.']],
+    5: [['hero', 'Bergis, du bor ju på ett berg.'], ['guard', 'Ja. Det är ett av mina största misstag.']],
+    10: [['majken', 'Jag bar plåtballongen hela vägen upp. Ni anar inte hur tung den är!']],
+    15: [['guard', 'Ottar säger att han är snabbast i skogen. Snigeln Sigge slog honom förra året.']],
+    20: [['ugo', 'Hoo-hoo! Härifrån ser jag allt! ...Var är jag?']],
+    25: [['hero', 'Vem har ätit alla blåbär?'], ['guard', 'Inte jag.'], ['hero', 'Du är blå i hela ansiktet, Bergis.']],
+    30: [['lova', 'Jag smyger uppför berget. Det är jättejobbigt att smyga i uppförsbacke.']],
+    35: [['guard', 'Ottar har övat landningar hela veckan. Det hörs. Hela tiden.']],
+    40: [['ottar', 'Nu kommer jag i full fart! Flytta på er!'], ['guard', 'Han kommer att landa på mig. Jag vet det.']],
+  },
+  {
+    1: [['guard', 'Välkommen till Gamla Eken, {hero}. Guldmoroten litar på dig. Jag också. Mest Guldmoroten.']],
+    6: [['hero', 'Varför vill Ulv ha Guldmoroten?'], ['guard', 'Han vill bli kung över skogen. Och han har slut på nattlampor.']],
+    10: [['ugo', 'Hoo... Ulv sa att jag får sova i eken om jag hjälper honom.']],
+    15: [['guard', 'Ekens rötter når hela skogen. De kittlas när minions trampar på dem.']],
+    20: [['vera', 'Jag är tillbaka! Med fler burkar och ännu sämre humör!']],
+    25: [['hero', 'Alla bossar kommer tillbaka. Lär de sig aldrig?'], ['guard', 'Nej. Det är därför de är skurkar.']],
+    30: [['lova', 'Jag har varit här hela tiden. I ett träd. Jag är bra på träd.']],
+    35: [['guard', '{hero}, klarar vi det här bjuder jag på morotstårta. Med extra morot.']],
+    40: [['ottar', 'Ulv lovade mig en landningsbana! Därför är jag här!']],
+    45: [['ulv', 'Hela skogen ska yla mitt namn! ULV! ULLLV!'], ['hero', 'Det låter mest som att du har ont i magen.']],
+    50: [['ulv', 'Nu kommer kungen själv! Buga! ...Ingen bugar?'], ['guard', 'Ingen bugar, Ulv.']],
+  },
+];
 const POPWORDS = ['POFF!', 'PANG!', 'PLOPP!', 'SPLOFF!', 'PFFT!', 'POP!'];
 const MENU_JOKES = [
-  'Inga kaniner skadades. Ballongerna däremot...',
+  'Inga kaniner skadades. Minionerna däremot...',
   'Morötter är bra för synen. Fråga Spejaren.',
   'Räven Rufus har fortfarande inte förstått varför.',
-  'Ballonger kan inte simma. Eller flyga, egentligen.',
-  'Tips: Ballonger hatar vassa saker. Och kaniner.',
+  'Minions kan inte simma. De har testat.',
+  'Tips: Minions hatar vassa saker. Och hjärtan.',
   'Kråkan Krax tror att morötter är guld.',
+  'Linnéa har aldrig haft en dålig hårdag. Aldrig.',
+  'Torstens hammare heter Hilda. Säg hej till Hilda.',
 ];
 const THEMES = [
   { grass: '#74d04f', path: '#f0cf8c', edge: '#b5834a', deco: ['bush', 'flower'] },
@@ -259,10 +389,10 @@ const MAP = [[120, 590], [400, 520], [150, 445], [395, 370], [270, 295]];
 const STORY = [
   'Djupt inne i Morotsskogen bor kaninväktarna. Varje kanin vaktar en speciell plats: gläntan, vattenhålet, svampdalen, blåbärsberget och Gamla Eken.',
   'Under Gamla Eken växer Guldmoroten. Den håller hela skogen grön och glad.',
-  'Rovdjuren vill ta över skogen, men de fångar aldrig kaninerna – kaniner är alldeles för snabba! Så Räven Rufus kom på en lömsk plan: BALLONGER.',
+  'Rovdjuren vill ta över skogen, men de fångar aldrig kaninerna – kaniner är alldeles för snabba! Så Räven Rufus kom på en lömsk plan: MINIONS gjorda av ballonger.',
   'Varför just ballonger? Rufus säger att de var "billiga på rea".',
-  'Ballongerna svävar in och stjäl kaninernas morötter. Tar rovdjuren alla morötter vissnar skogen, och då blir den deras.',
-  'Ställ ut kaniner längs stigen och poppa varenda ballong. Kaninerna är inte arga – bara väldigt, väldigt bestämda!',
+  'Minionerna marscherar in och stjäl kaninernas morötter. Tar rovdjuren alla morötter vissnar skogen, och då blir den deras.',
+  'Men kaninerna har fått hjälp: hjältinnan LINNÉA, som skjuter hjärtan. Ställ ut kaniner, flytta Linnéa dit det behövs och poppa varenda minion!',
 ];
 
 function rnd(a, b, c) {
@@ -339,12 +469,21 @@ function stats(t) {
   for (let i = 0; i < t.lvl - 1; i++) R.ups[i].f(s);
   return s;
 }
+function heroStats(h) {
+  const H = HEROES[h.key];
+  const s = Object.assign({ camo: false, splash: 0, stun: 0, knock: 0, pierce: 1, melee: false, cdr: 1, dtype: H.dtype }, H.base);
+  s.dmg *= 1 + .18 * (h.lvl - 1); s.range += 4 * (h.lvl - 1); s.cd *= 1 - .025 * (h.lvl - 1);
+  for (const k of h.items) ITEMS.find(it => it.key === k).f(s);
+  return s;
+}
 const moveCost = t => Math.round(RABBITS[t.type].cost * BAL.moveCost);
 const rangeCost = t => Math.round(RABBITS[t.type].cost * BAL.rangeCost);
+const countOf = i => g.towers.filter(t => t.type === i).length;
 function canHurt(e, dtype) {
   if (!dtype) return false;
-  if (e.plat) return dtype === 'boom';
-  if (e.seg) return dtype === 'sharp';
+  if (dtype === 'true') return true;
+  if (e.plat) return dtype === 'boom' || dtype === 'smash';
+  if (e.seg) return dtype === 'sharp' || dtype === 'heart';
   return true;
 }
 function bossTraits(b) {
@@ -352,8 +491,8 @@ function bossTraits(b) {
   if (b.props.plat) t.push('PLÅT – bara explosioner biter');
   if (b.props.seg) t.push('GUMMI – bara vassa saker biter');
   if (b.props.camo) t.push('OSYNLIG – behöver Spejarkanin');
-  if (b.ability === 'spawn') t.push('Släpper ut röda ballonger');
-  if (b.ability === 'spawnk') t.push('Släpper ut klasballonger');
+  if (b.ability === 'spawn') t.push('Släpper ut svärdminions');
+  if (b.ability === 'spawnk') t.push('Släpper ut klanminions');
   if (b.ability === 'dash') t.push('Gör supersnabba ryck');
   t.push('SVAG MOT ' + DNAME[b.weak] + ' – dubbel skada');
   return t;
@@ -370,33 +509,63 @@ function bossCounters(b) {
 }
 
 // ---------- state ----------
-let scene = save.story ? 'menu' : 'story', g = null, btns = [], T = 0, endInfo = null;
+let scene = save.story ? 'menu' : 'story', g = null, btns = [], T = 0, endInfo = null, menuAsk = null;
 
 function startLevel(i, run) {
   const def = LEVELS[i];
+  buildBg(i);
   g = {
     lv: i, def, L: def.L, theme: THEMES[i], lastBoss: BOSSES[def.bosses[def.waves]],
-    wave: 0, total: def.waves, lives: 20, gold: BAL.startGold[i],
-    towers: [], enemies: [], projs: [], parts: [], pops: [], beams: [], bubbles: [], queue: [], next: [],
+    wave: 0, total: def.waves, lives: BAL.lives, gold: BAL.startGold[i],
+    towers: [], enemies: [], projs: [], parts: [], pops: [], beams: [], bubbles: [], queue: [], next: [], hfx: [],
     spawnT: 0, gap: .6, waveScale: 1, state: 'prep', countdown: 12, speed: 1, paused: false,
-    armed: 0, sel: null, moving: null, hover: null, shake: 0, result: null, modals: [{ kind: 'intro' }], leaks: {},
-    banner: null, chatT: 8,
+    armed: 0, sel: null, moving: null, heroMove: false, hover: null, shake: 0, result: null,
+    modals: [{ kind: 'intro' }, { kind: 'hero' }], leaks: {},
+    banner: null, ann: null, dialog: [], dlgT: 0, chatT: 8, hero: null, firstPop: false, leakAnnT: 0,
   };
   if (run) {
-    Object.assign(g, { wave: run.wave, gold: run.gold, lives: run.lives, leaks: run.leaks || {}, modals: [], armed: -1 });
+    Object.assign(g, { wave: run.wave, gold: run.gold, lives: run.lives, leaks: run.leaks || {}, modals: [], armed: -1, firstPop: true });
     for (const o of run.towers) {
       const t = Object.assign({ x: o.c * CS + CS / 2, y: GY + o.r * CS + CS / 2, cd: 0, ang: -.5, sees: false, seed: Math.random() * 10, kick: 0, hop: .5 }, o);
       t.s = stats(t); g.towers.push(t);
     }
+    if (run.hero && HEROES[run.hero.key]) setHero(run.hero.key, run.hero);
+    else g.modals.push({ kind: 'hero' });
   } else { save.run = null; persist(); }
   endInfo = null; scene = 'play';
   prepNext(!run);
 }
+// best free cell for a new hero: next to as much path as possible, a bit towards the middle
+function heroSpot() {
+  let best = null, bs = -1e9;
+  const path = [...g.L.cells].map(k => k.split(',').map(Number));
+  for (let c = 0; c < COLS; c++) for (let r = 0; r < ROWS; r++) {
+    if (!canBuild(c, r)) continue;
+    let n = 0; for (const [a, b] of path) if (Math.hypot(a - c, b - r) <= 2.2) n++;
+    n -= Math.abs(r - 6) * .4 + Math.abs(c - 4) * .2;
+    if (n > bs) { bs = n; best = { c, r }; }
+  }
+  return best || { c: 0, r: 0 };
+}
+function setHero(key, o = {}) {
+  const spot = o.c != null && canBuild(o.c, o.r) ? o : heroSpot();
+  const h = { hero: true, key, H: HEROES[key], name: HEROES[key].name, c: spot.c, r: spot.r, x: spot.c * CS + CS / 2, y: GY + spot.r * CS + CS / 2,
+    lvl: o.lvl || 1, xp: o.xp || 0, items: o.items ? o.items.slice() : [], cd: 0, qT: 0, rT: 0, ang: -.5, kick: 0, hop: .6, cast: 0,
+    seed: Math.random() * 10, pops: o.pops || 0, multi: 0, multiT: 0, sees: false };
+  h.s = heroStats(h);
+  g.hero = h;
+  return h;
+}
 function saveRun() {
+  if (g.result || g.lives <= 0) return;
+  const h = g.hero;
   save.run = { lv: g.lv, wave: g.wave, gold: Math.floor(g.gold), lives: g.lives, leaks: g.leaks,
+    hero: h ? { key: h.key, c: h.c, r: h.r, lvl: h.lvl, xp: h.xp, items: h.items, pops: h.pops } : null,
     towers: g.towers.map(t => ({ type: t.type, c: t.c, r: t.r, lvl: t.lvl, invested: t.invested, mode: t.mode, name: t.name, pops: t.pops, rangeUp: !!t.rangeUp })) };
   persist();
 }
+const heroName = () => g && g.hero ? g.hero.H.name.charAt(0) + g.hero.H.name.slice(1).toLowerCase() : 'Linnéa';
+function announce(text, color = '#ffd23b', sub = '') { g.ann = { text, color, sub, life: 1.8, max: 1.8 }; }
 function nextBoss() {
   const from = g.state === 'prep' ? g.wave + 1 : g.wave;
   const ws = Object.keys(g.def.bosses).map(Number).filter(w => w >= from).sort((a, b) => a - b);
@@ -417,22 +586,28 @@ function prepNext(first) {
   persist();
   const bs = g.next.find(s => s.startsWith('boss'));
   if (bs) g.modals.push({ kind: 'boss', key: bs.slice(5) });
+  const beat = BEATS[g.lv][g.wave + 1];
+  if (beat) { g.dialog = beat.slice(); g.dlgT = 0; }
 }
 function startWave() {
-  g.wave++; g.state = 'wave';
+  g.wave++; g.state = 'wave'; g.heroMove = false;
   g.queue = g.next.slice(); g.spawnT = 0;
-  g.gap = Math.max(.25, .62 - g.wave * .008 - g.lv * .03);
+  g.gap = Math.max(.18, .55 - g.wave * .008 - g.lv * .03);
   const m = g.wave - 1, late = Math.max(0, m - BAL.lateFrom);
   g.waveScale = (1 + BAL.wave * m + BAL.late * late * late) * BAL.level[g.lv];
+  if (g.wave === 1) announce('MINIONERNA ÄR PÅ VÄG!', '#ff8a8a');
   sfx(300, .25, 'triangle', .05, 400);
 }
 function nextWaveNow() {
   if (!g || g.state !== 'prep' || g.paused || g.result || g.modals.length) return;
-  g.gold += Math.ceil(g.countdown) * 2; startWave();
+  // starting early pays a little, but only while the countdown runs
+  if (save.auto) g.gold += Math.ceil(g.countdown) * 2;
+  startWave();
 }
 function mkEnemy(o, d) {
   const e = Object.assign({ boss: null, kind: null, K: null, weak: null, seg: false, plat: false, camo: false, d, x: -99, y: -99,
-    slowT: 0, slow: 0, stunT: 0, stunImm: 0, flash: 0, weakT: 0, immT: 0, abT: 3, dashT: 0, rot: Math.random() * 6.28, dead: false }, o);
+    slowT: 0, slow: 0, stunT: 0, stunImm: 0, charmT: 0, charmImm: 0, knocks: 0, flash: 0, weakT: 0, immT: 0, abT: 3, dashT: 0,
+    rot: Math.random() * 6.28, dead: false }, o);
   e.max = e.hp; posAt(g.L, Math.max(0, d), e);
   return e;
 }
@@ -472,10 +647,11 @@ function damage(e, amount, dtype, quiet, src) {
   if (!canHurt(e, dtype)) {
     if (!quiet && e.immT <= 0) {
       pop(e.x, e.y - 24, e.plat ? 'PLONK!' : 'BOING!', '#e8ecf4'); e.immT = .8; sfx(240, .06, 'square', .02, 0, 'imm');
-      if (src && Math.random() < .2) say(src, pick(LINES.imm));
+      if (src && Math.random() < .2) say(src, src.hero && dtype === 'heart' ? 'Plåt har inget hjärta!' : pick(LINES.imm));
     }
     return;
   }
+  if (e.charmT > 0) amount *= 1.3;
   if (e.weak && dtype === e.weak) {
     amount *= 2;
     if (!quiet && e.weakT <= 0) { pop(e.x + 20, e.y - 40, 'SVAG!', '#ffb347'); e.weakT = .6; }
@@ -487,6 +663,17 @@ function damage(e, amount, dtype, quiet, src) {
 function kill(e, src) {
   e.dead = true; g.gold += e.gold;
   if (src) src.pops++;
+  if (!g.firstPop) { g.firstPop = true; announce('FÖRSTA POPPET!', '#ff7ad9', src && src.name ? src.name : ''); }
+  const h = g.hero;
+  if (h) {
+    if (src === h) {
+      heroXp(e.boss ? 25 : 2);
+      h.multi = h.multiT > 0 ? h.multi + 1 : 1; h.multiT = 1.3;
+      if (h.multi >= 2 && h.multi <= 5) announce(MULTI[h.multi], h.H.color, h.H.name);
+      else if (h.multi === 8) announce('LEGENDARISK!', '#ffd23b', h.H.name);
+      if (h.multi === 4 && Math.random() < .6) say(h, pick(h.H.lines.multi));
+    } else if (Math.hypot(e.x - h.x, e.y - h.y) <= 230) heroXp(e.boss ? 12 : 1);
+  }
   burst(e.x, e.y, e.color, e.boss ? 34 : 10);
   g.beams.push({ ring: true, x1: e.x, y1: e.y, r: e.r * 2, life: .2, max: .2, color: '#ffffff' });
   if (e.boss) {
@@ -527,6 +714,11 @@ function pickTargets(t) {
 function applyHit(p, e) {
   damage(e, p.dmg, p.dtype, p.slow > 0, p.src);
   if (e.dead) return;
+  // knockback wears off on the same minion so it cannot be held back forever
+  if (p.knock && canHurt(e, p.dtype)) {
+    e.d = Math.max(0, e.d - p.knock / (1 + e.knocks * .3) * (e.boss ? .15 : 1)); e.knocks++;
+    posAt(g.L, e.d, e);
+  }
   if (p.slow) { e.slow = e.boss ? p.slow * .5 : p.slow; e.slowT = 1.6; }
   // a frozen balloon cannot be refrozen right away, or ice rabbits could hold it forever
   if (p.stun && !e.boss && e.stunImm <= 0) { e.stunT = p.stun; e.stunImm = 2.5; }
@@ -540,23 +732,159 @@ function bossAbility(e, dt) {
   else if (a === 'spawnk') { e.abT = 6; spawn('k', Math.max(0, e.d - 30)); comicPop(e.x, e.y - 60, 'PUFF!', '#e8ecf4'); }
   else if (a === 'dash') { e.abT = 5; e.dashT = 1.1; comicPop(e.x, e.y - 60, 'SWOSCH!', '#ffe58a'); }
 }
+
+// ---------- hero ----------
+function heroXp(n) {
+  const h = g.hero;
+  if (!h || h.lvl >= HERO_MAX) return;
+  h.xp += n;
+  while (h.lvl < HERO_MAX && h.xp >= xpNeed(h.lvl)) {
+    h.xp -= xpNeed(h.lvl); h.lvl++; h.s = heroStats(h); h.hop = .5;
+    burst(h.x, h.y, h.H.color, 14); comicPop(h.x, h.y - 50, 'NIVÅ ' + h.lvl + '!', h.H.color);
+    sfx(700, .25, 'triangle', .05, 500);
+    if (h.lvl === ULT_LVL) announce('ULTIMATE REDO!', h.H.color, h.H.r.name);
+    else say(h, pick(h.H.lines.lvl));
+  }
+}
+function inReach(h, r, any) {
+  return g.enemies.filter(e => !e.dead && (any || !e.camo || h.sees) && Math.hypot(e.x - h.x, e.y - h.y) <= r + e.r);
+}
+function heroCd(h, slot) { return h.H[slot].cd * h.s.cdr; }
+// abilities aim themselves so they work with one tap on a phone
+function cast(slot) {
+  const h = g.hero;
+  if (!h || g.result || g.modals.length || g.paused) return;
+  if (slot === 'r' && h.lvl < ULT_LVL) { pop(h.x, h.y - 40, 'NIVÅ ' + ULT_LVL + ' KRÄVS', '#ffe58a', 14); sfx(150, .1, 'sawtooth'); return; }
+  if ((slot === 'q' ? h.qT : h.rT) > 0) { sfx(150, .08, 'sawtooth'); return; }
+  const k = h.key, s = h.s;
+  let ok = true;
+  if (k === 'linnea' && slot === 'q') {
+    const t = inReach(h, s.range * 1.8).sort((a, b) => b.d - a.d)[0];
+    if (t) g.hfx.push({ kind: 'boomer', x: h.x, y: h.y, ang: Math.atan2(t.y - h.y, t.x - h.x), out: 0, max: 300, back: false, hit: [], dmg: s.dmg * 3.5, rot: 0 });
+    else ok = false;
+  } else if (k === 'linnea') {
+    const list = inReach(h, 200, true);
+    if (!list.length) ok = false;
+    for (const e of list) {
+      if (e.boss) { e.slow = .5; e.slowT = 3; }
+      else if (e.charmImm <= 0) { e.charmT = 3; e.charmImm = 7; }
+    }
+    ring(h.x, h.y, 200, '#ff8fc4'); burstHearts(h.x, h.y, 18);
+    if (ok) comicPop(h.x, h.y - 60, 'FÖRTJUST!', '#ff5fa2');
+  } else if (k === 'torsten' && slot === 'q') {
+    const list = inReach(h, 135, true);
+    if (!list.length) ok = false;
+    for (const e of list) {
+      applyHit({ dmg: s.dmg * 3, dtype: 'smash', src: h }, e);
+      if (e.dead) continue;
+      if (e.boss) { e.slow = .5; e.slowT = 2; } else { e.stunT = 1.2; e.stunImm = 2.5; }
+    }
+    ring(h.x, h.y, 135, '#c9a26b'); g.shake = .3; burst(h.x, h.y + 10, '#c9a26b', 14, 160);
+  } else if (k === 'torsten') {
+    const list = inReach(h, 215, true);
+    if (!list.length) ok = false;
+    for (const e of list) applyHit({ dmg: s.dmg * 9, dtype: 'smash', knock: 70, src: h }, e);
+    ring(h.x, h.y, 215, '#ffd23b'); g.shake = .7; burst(h.x, h.y, '#ffd23b', 26, 220);
+    if (ok) comicPop(h.x, h.y - 60, 'JÄTTESMASH!', '#5aa84a');
+  } else if (k === 'maja' && slot === 'q') {
+    const list = inReach(h, 235, true);
+    if (!list.length) ok = false;
+    for (const e of list) {
+      if (e.camo) { e.camo = false; pop(e.x, e.y - 24, 'SYNS!', '#c9d0ff'); }
+      e.slow = e.boss ? .25 : .5; e.slowT = 2.5;
+    }
+    ring(h.x, h.y, 235, '#dfe4ff');
+  } else {
+    const list = inReach(h, 320, true).sort((a, b) => b.hp - a.hp);
+    if (!list.length) ok = false;
+    for (let i = 0; i < 12 && list.length; i++) g.hfx.push({ kind: 'star', t: list[i % list.length], delay: i * .1, fall: .45, dmg: s.dmg * 6 });
+    if (ok) comicPop(h.x, h.y - 60, 'STJÄRNREGN!', '#7d8cff');
+  }
+  if (!ok) { pop(h.x, h.y - 40, 'INGEN I NÄRHETEN', '#ffe58a', 14); sfx(150, .1, 'sawtooth'); return; }
+  if (slot === 'q') h.qT = heroCd(h, 'q'); else h.rT = heroCd(h, 'r');
+  h.cast = .4; h.hop = .3;
+  say(h, pick(h.H.lines[slot]), 1.8);
+  sfx(slot === 'q' ? 620 : 300, .35, 'triangle', .06, slot === 'q' ? 400 : 700);
+}
+function ring(x, y, r, color) { g.beams.push({ ring: true, x1: x, y1: y, r, life: .4, max: .4, color }); }
+function burstHearts(x, y, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * 6.28, v = 60 + Math.random() * 140;
+    g.parts.push({ heart: true, x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 60, life: .9, max: .9, rot: 0, size: 0, color: '#ff5fa2' });
+  }
+}
+function updateHero(dt, auras) {
+  const h = g.hero;
+  if (!h) return;
+  h.kick = Math.max(0, h.kick - dt); h.hop = Math.max(0, h.hop - dt); h.cast = Math.max(0, h.cast - dt); h.multiT -= dt;
+  h.qT = Math.max(0, h.qT - dt); h.rT = Math.max(0, h.rT - dt);
+  h.sees = h.s.camo || auras.some(a => Math.hypot(a.x - h.x, a.y - h.y) <= a.s.range);
+  h.cd = Math.max(0, h.cd - dt);
+  if (h.cd > 0 || g.heroMove) return;
+  const s = h.s;
+  let best = null;
+  for (const e of g.enemies) {
+    if (e.dead || (e.camo && !h.sees) || !canHurt(e, s.dtype)) continue;
+    if (Math.hypot(e.x - h.x, e.y - h.y) > s.range + e.r) continue;
+    if (!best || e.d > best.d) best = e;
+  }
+  if (!best) return;
+  h.ang = Math.atan2(best.y - h.y, best.x - h.x); h.cd = s.cd; h.kick = .15;
+  if (s.melee) {
+    for (const e of g.enemies) if (!e.dead && Math.hypot(e.x - best.x, e.y - best.y) <= s.splash + e.r * .5)
+      applyHit({ dmg: s.dmg, dtype: s.dtype, stun: s.stun, src: h }, e);
+    ring(best.x, best.y, s.splash, '#c9a26b'); g.shake = Math.max(g.shake, .08);
+    sfx(110, .12, 'square', .05, -40, 'hammer');
+  } else {
+    g.projs.push({ x: h.x, y: h.y - 10, t: best, tx: best.x, ty: best.y, a: 0, dmg: s.dmg, dtype: s.dtype, spd: s.proj, pierce: s.pierce, hit: [],
+      splash: 0, slow: 0, stun: 0, strip: false, sees: h.sees, knock: s.knock, htype: h.key, src: h });
+    sfx(h.key === 'linnea' ? 880 : 640, .08, 'sine', .04, 300, 'hero');
+  }
+}
+function updateHfx(dt) {
+  const h = g.hero;
+  for (const f of g.hfx) {
+    if (f.kind === 'boomer') {
+      const step = 480 * dt; f.rot += dt * 9;
+      if (!f.back) { f.x += Math.cos(f.ang) * step; f.y += Math.sin(f.ang) * step; f.out += step; if (f.out >= f.max) { f.back = true; f.hit = []; } }
+      else {
+        const dx = h.x - f.x, dy = h.y - f.y, d = Math.hypot(dx, dy);
+        if (d < step + 8) { f.done = true; continue; }
+        f.x += dx / d * step; f.y += dy / d * step;
+      }
+      for (const e of g.enemies) if (!e.dead && !f.hit.includes(e) && Math.hypot(e.x - f.x, e.y - f.y) <= e.r + 22) {
+        f.hit.push(e); applyHit({ dmg: f.dmg, dtype: 'heart', knock: 45, src: h }, e);
+      }
+    } else if (f.kind === 'star') {
+      if (f.delay > 0) { f.delay -= dt; continue; }
+      f.fall -= dt;
+      if (f.fall <= 0) {
+        f.done = true;
+        const e = f.t;
+        if (!e.dead) { applyHit({ dmg: f.dmg, dtype: 'true', src: h }, e); ring(e.x, e.y, 30, '#dfe4ff'); }
+        sfx(1200, .08, 'sine', .03, -600, 'star');
+      }
+    }
+  }
+  g.hfx = g.hfx.filter(f => !f.done);
+}
 function finish(win) {
   if (g.result) return;
   g.result = win ? 'win' : 'lose';
   let stars = 0;
   if (win) {
-    stars = g.lives >= 18 ? 3 : g.lives >= 10 ? 2 : 1;
+    stars = g.lives >= BAL.lives * .9 ? 3 : g.lives >= BAL.lives * .5 ? 2 : 1;
     save.stars[g.lv] = Math.max(save.stars[g.lv], stars);
   }
   save.run = null; persist();
-  let tip = 'Uppgradera dina kaniner, köp räckvidd och bygg fler längs stigen!';
+  let tip = 'Uppgradera dina kaniner, köp räckvidd och flytta hjälten dit det brinner!';
   const worst = Object.entries(g.leaks).sort((a, b) => b[1] - a[1])[0];
   if (worst) tip = {
-    camo: 'Osynliga ballonger slank förbi. Ställ en SPEJARKANIN nära stigen!',
-    plat: 'Plåtballonger kom igenom. Bara BOMBKANIN biter på plåt!',
-    seg: 'Gummiballonger studsade förbi. Använd vassa PILKANINER!',
-    y: 'De snabba gula hann förbi. Sakta ner dem med ISKANIN!',
-    k: 'Klasballongerna sprack till många små. Ha fler kaniner längre fram!',
+    camo: 'Osynliga minions slank förbi. Ställ en SPEJARKANIN nära stigen!',
+    plat: 'Plåtminions kom igenom. Bara BOMBKANIN och Torsten biter på plåt!',
+    seg: 'Gummiminions studsade förbi. Använd vassa PILKANINER eller Linnéas hjärtan!',
+    y: 'De snabba sprintminionerna hann förbi. Sakta ner dem med ISKANIN!',
+    k: 'Klanminionerna sprack till många små. Ha fler kaniner längre fram!',
     boss: 'En boss tog sig fram. Kolla bossens svagheter innan bossvågen!',
   }[worst[0]] || tip;
   endInfo = { win, stars, tip };
@@ -566,15 +894,23 @@ function finish(win) {
 // ---------- update ----------
 function update(dt) {
   if (scene !== 'play' || g.paused || g.result || g.modals.length) return;
+  // dialog runs on real time so it reads the same at every game speed
+  if (g.dialog.length) {
+    g.dlgT += dt;
+    if (g.dlgT > 2.6 + g.dialog[0][1].length * .045) { g.dialog.shift(); g.dlgT = 0; }
+  }
+  if (g.ann) { g.ann.life -= dt; if (g.ann.life <= 0) g.ann = null; }
   dt *= g.speed;
+  g.leakAnnT -= dt;
   if (g.state === 'prep') {
-    g.countdown -= dt; if (g.countdown <= 0) startWave();
+    if (save.auto) { g.countdown -= dt; if (g.countdown <= 0) startWave(); }
   } else {
     g.spawnT -= dt;
     if (g.queue.length && g.spawnT <= 0) { spawn(g.queue.shift()); g.spawnT = g.gap; }
     if (!g.queue.length && !g.enemies.length) {
       if (g.wave >= g.total) { finish(true); return; }
-      const bonus = 12 + g.wave * 2; g.gold += bonus;
+      const bonus = BAL.waveBonus + g.wave * BAL.waveBonusN; g.gold += bonus;
+      g.hfx = [];
       comicPop(W / 2, 420, 'VÅG KLAR!', '#7dff7d');
       pop(W / 2, 466, '+' + bonus, '#ffe14d', 22);
       for (const t of g.towers) {
@@ -589,13 +925,14 @@ function update(dt) {
   }
   for (const e of g.enemies) {
     if (e.dead) continue;
-    e.flash -= dt; e.weakT -= dt; e.immT -= dt; e.stunImm -= dt; e.rot += dt * 2;
+    e.flash -= dt; e.weakT -= dt; e.immT -= dt; e.stunImm -= dt; e.charmImm -= dt; e.rot += dt * 2;
     if (e.boss) bossAbility(e, dt);
     let sp = e.sp;
     if (e.stunT > 0) { e.stunT -= dt; sp = 0; }
+    else if (e.charmT > 0) { e.charmT -= dt; sp *= -.6; }
     else if (e.slowT > 0) { e.slowT -= dt; sp *= 1 - e.slow; }
     if (e.dashT > 0) { e.dashT -= dt; sp *= 3; }
-    e.d += sp * dt;
+    e.d = Math.max(0, e.d + sp * dt);
     if (e.d >= g.L.len) {
       e.dead = true; g.shake = .3;
       const f = e.boss ? 'boss' : e.camo ? 'camo' : e.plat ? 'plat' : e.seg ? 'seg' : e.kind;
@@ -606,6 +943,7 @@ function update(dt) {
       pop(ex.x - 20, ex.y - 30, e.boss ? 'MUAHAHA!' : 'HIHI!', '#ff8a8a', 16);
       if (e.boss) say({ x: ex.x - 60, y: ex.y }, e.boss.win, 3, 40);
       else if (g.towers.length && Math.random() < .5) say(pick(g.towers), pick(LINES.leak));
+      if (g.leakAnnT <= 0) { g.leakAnnT = 14; announce('MOROTSLADAN ÄR UNDER ATTACK!', '#ff8a8a'); }
       sfx(150, .25, 'sawtooth', .06, -60, 'leak');
       if (g.lives <= 0) { g.lives = 0; finish(false); }
     } else posAt(g.L, e.d, e);
@@ -641,6 +979,8 @@ function update(dt) {
       sfx(t.type === 2 ? 200 : 520, .07, 'triangle', .04, -150, 'shot' + t.type);
     }
   }
+  updateHero(dt, auras);
+  updateHfx(dt);
   for (const p of g.projs) {
     if (p.done) continue;
     if (p.t && !p.t.dead) { p.tx = p.t.x; p.ty = p.t.y; }
@@ -662,7 +1002,7 @@ function update(dt) {
     p.done = true;
   }
   g.chatT -= dt;
-  if (g.chatT <= 0) { g.chatT = 10 + Math.random() * 9; if (g.towers.length) say(pick(g.towers), pick(LINES.idle), 2.8); }
+  if (g.chatT <= 0) { g.chatT = 10 + Math.random() * 9; if (g.towers.length && !g.dialog.length) say(pick(g.towers), pick(LINES.idle), 2.8); }
   g.enemies = g.enemies.filter(e => !e.dead);
   g.projs = g.projs.filter(p => !p.done);
   for (const b of g.beams) b.life -= dt;
@@ -702,9 +1042,33 @@ function rr(x, y, w, h, r) {
   ctx.beginPath();
   if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
 }
+// painted look: every flat colour becomes a soft ball lit from the top left with warm light and violet shade
+const toneCache = new Map();
+function tone(hex) {
+  let t = toneCache.get(hex);
+  if (!t) {
+    const n = parseInt(hex.slice(1), 16), c = [n >> 16, n >> 8 & 255, n & 255];
+    const mix = (k, to) => 'rgb(' + c.map((v, i) => Math.round(v + (to[i] - v) * k)).join(',') + ')';
+    t = [mix(.5, [255, 247, 225]), hex, mix(.42, [44, 20, 70])];
+    toneCache.set(hex, t);
+  }
+  return t;
+}
+function paint(fill, x, y, r) {
+  if (typeof fill !== 'string' || fill.length !== 7 || fill[0] !== '#' || r < 3.5) return fill;
+  const t = tone(fill), gr = ctx.createRadialGradient(x - r * .38, y - r * .45, r * .08, x - r * .1, y - r * .1, r * 1.3);
+  gr.addColorStop(0, t[0]); gr.addColorStop(.42, t[1]); gr.addColorStop(1, t[2]);
+  return gr;
+}
+function vpaint(fill, y, h) {
+  if (typeof fill !== 'string' || fill.length !== 7 || fill[0] !== '#') return fill;
+  const t = tone(fill), gr = ctx.createLinearGradient(0, y, 0, y + h);
+  gr.addColorStop(0, t[0]); gr.addColorStop(.35, t[1]); gr.addColorStop(1, t[2]);
+  return gr;
+}
 function card(x, y, w, h, fill, r = 14) {
   ctx.fillStyle = 'rgba(0,0,0,.25)'; rr(x, y + 5, w, h, r); ctx.fill();
-  ctx.fillStyle = fill; ctx.strokeStyle = INK; ctx.lineWidth = 3.5; rr(x, y, w, h, r); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = h < 140 ? vpaint(fill, y - h * .6, h * 2.4) : fill; ctx.strokeStyle = INK; ctx.lineWidth = 3.5; rr(x, y, w, h, r); ctx.fill(); ctx.stroke();
   ctx.fillStyle = 'rgba(255,255,255,.28)'; rr(x + 4, y + 4, w - 8, Math.min(h * .35, 40), Math.max(2, r - 4)); ctx.fill();
 }
 function btn(x, y, w, h, label, color, fn, o = {}) {
@@ -716,12 +1080,30 @@ function btn(x, y, w, h, label, color, fn, o = {}) {
   lines.forEach((ln, i) => txt(ln, x + w / 2, y + h / 2 + (i - (lines.length - 1) / 2) * sz * 1.2, sz, o.disabled ? '#eef' : '#fff'));
 }
 function circ(x, y, r, fill, lw = 3) {
-  ctx.fillStyle = fill; ctx.strokeStyle = INK; ctx.lineWidth = lw;
+  ctx.fillStyle = lw ? paint(fill, x, y, r) : fill; ctx.strokeStyle = INK; ctx.lineWidth = lw;
   ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); if (lw) ctx.stroke();
 }
 function ell(x, y, rx, ry, fill, rot = 0, lw = 3) {
-  ctx.fillStyle = fill; ctx.strokeStyle = INK; ctx.lineWidth = lw;
+  ctx.fillStyle = lw ? paint(fill, x, y, Math.max(rx, ry)) : fill; ctx.strokeStyle = INK; ctx.lineWidth = lw;
   ctx.beginPath(); ctx.ellipse(x, y, rx, ry, rot, 0, 7); ctx.fill(); if (lw) ctx.stroke();
+}
+function heartPath(x, y, s) {
+  ctx.beginPath();
+  ctx.moveTo(x, y + 6 * s);
+  ctx.bezierCurveTo(x - 8 * s, y, x - 9 * s, y - 6 * s, x - 4.5 * s, y - 7.5 * s);
+  ctx.bezierCurveTo(x - 2 * s, y - 8.3 * s, x, y - 6.5 * s, x, y - 4.5 * s);
+  ctx.bezierCurveTo(x, y - 6.5 * s, x + 2 * s, y - 8.3 * s, x + 4.5 * s, y - 7.5 * s);
+  ctx.bezierCurveTo(x + 9 * s, y - 6 * s, x + 8 * s, y, x, y + 6 * s);
+  ctx.closePath();
+}
+function heart(x, y, s, fill = '#ff5fa2', lw = 2, glow = 0) {
+  ctx.save();
+  if (glow) { ctx.shadowColor = fill; ctx.shadowBlur = glow; }
+  heartPath(x, y, s); ctx.fillStyle = paint(fill, x, y - 2 * s, 9 * s); ctx.fill();
+  ctx.shadowBlur = 0;
+  if (lw) { ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.stroke(); }
+  ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.beginPath(); ctx.ellipse(x - 4 * s, y - 4.5 * s, 1.6 * s, 1 * s, -.6, 0, 7); ctx.fill();
+  ctx.restore();
 }
 function tri(x1, y1, x2, y2, x3, y3, fill, lw = 2.5) {
   ctx.fillStyle = fill; ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.lineJoin = 'round';
@@ -867,6 +1249,102 @@ function drawPredator(animal, x, y, s = 1) {
   ctx.lineCap = 'butt';
   ctx.restore();
 }
+// heroes: chibi people with painted shading; an = { lift, cast, swing, blink, seed }
+const LOOKS = {
+  linnea: { skin: '#ffd9bf', hair: '#7a4626', hair2: '#b77945', eyes: '#f2a516', top: '#fff2f6', skirt: '#d63c74', trim: '#ffd23b', boots: '#7a2a4a', ears: true, long: true },
+  torsten: { skin: '#f6cba6', hair: '#d9772b', hair2: '#f6b16a', eyes: '#3f7d3a', top: '#5aa84a', skirt: '#3f7a35', trim: '#c98b4a', boots: '#5a3a1a', band: '#e53935', big: true },
+  maja: { skin: '#ffe0cc', hair: '#c9c0ff', hair2: '#f4f1ff', eyes: '#5b6cff', top: '#33438f', skirt: '#24306e', trim: '#dfe4ff', boots: '#1d2450', tail: true },
+};
+function drawHero(key, x, y, ang = 0, s = 1, an = {}) {
+  const L = LOOKS[key], lift = an.lift || 0, cast = an.cast || 0, sway = Math.sin(T * 2.2 + (an.seed || 0));
+  const lx = Math.cos(ang) * 1.2, ly = Math.sin(ang) * .9, k = L.big ? 1.08 : 1;
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.ellipse(0, 24 * s, 18 * s * (1 - lift / 40), 6.5 * s, 0, 0, 7); ctx.fill();
+  ctx.translate(0, -lift); ctx.scale(s * k, s * k);
+  ctx.lineJoin = 'round';
+  // hair that falls behind the body
+  if (L.long) {
+    ctx.fillStyle = paint(L.hair, 0, -6, 24); ctx.strokeStyle = INK; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(-15, -14); ctx.quadraticCurveTo(-22 + sway, 6, -15 + sway * 1.5, 19);
+    ctx.quadraticCurveTo(0, 15, 15 + sway * 1.5, 19); ctx.quadraticCurveTo(22 + sway, 6, 15, -14); ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+  if (L.tail) {
+    ctx.fillStyle = paint(L.hair, 16, -12, 16); ctx.strokeStyle = INK; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(9, -25); ctx.quadraticCurveTo(30 + sway * 2, -22, 22 + sway * 3, 6); ctx.quadraticCurveTo(19, -9, 8, -14); ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+  ell(-5, 22, 4.5, 3.2, L.boots, 0, 2); ell(5, 22, 4.5, 3.2, L.boots, 0, 2);
+  // dress or tunic
+  ctx.fillStyle = vpaint(L.skirt, 2, 24); ctx.strokeStyle = INK; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(-7, 6); ctx.lineTo(7, 6); ctx.quadraticCurveTo(13, 13, 14.5, 20); ctx.quadraticCurveTo(0, 23.5, -14.5, 20);
+  ctx.quadraticCurveTo(-13, 13, -7, 6); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = L.trim; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-13, 18.3); ctx.quadraticCurveTo(0, 21.6, 13, 18.3); ctx.stroke();
+  ctx.fillStyle = vpaint(L.top, -2, 16); ctx.strokeStyle = INK; ctx.lineWidth = 2.5; rr(-8, 1, 16, 10, 4); ctx.fill(); ctx.stroke();
+  if (key === 'linnea') heart(0, 6.5, .36, '#ff5fa2', 1);
+  else if (key === 'torsten') { ctx.fillStyle = L.trim; ctx.fillRect(-7.5, 8, 15, 2.6); }
+  else { ctx.fillStyle = '#ffe58a'; ctx.beginPath(); ctx.arc(0, 6, 2.4, 0, 7); ctx.fill(); }
+  ell(-10, 9, 3, 6, L.skin, .5, 2);
+  // the arm with the weapon points at the target
+  const hx = 8 + Math.cos(ang) * 9, hy = 7 + Math.sin(ang) * 7 - cast * 6;
+  ctx.strokeStyle = INK; ctx.lineWidth = 7; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(7, 5); ctx.lineTo(hx, hy); ctx.stroke();
+  ctx.strokeStyle = L.skin; ctx.lineWidth = 3.6; ctx.stroke(); ctx.lineCap = 'butt';
+  circ(0, -12, 14.5, L.skin, 2.5);
+  if (L.ears) {
+    // small fox-like ears in the hair colour, no tails
+    tri(-12, -20, -17, -37 + sway, -3, -26, L.hair, 2.5); tri(12, -20, 17, -37 - sway, 3, -26, L.hair, 2.5);
+    tri(-11.5, -23, -15, -33 + sway, -6, -26, '#ffc2d4', 0); tri(11.5, -23, 15, -33 - sway, 6, -26, '#ffc2d4', 0);
+  }
+  ctx.fillStyle = paint(L.hair, -3, -22, 18); ctx.strokeStyle = INK; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(-15.5, -9);
+  ctx.quadraticCurveTo(-17, -30, 0, -29); ctx.quadraticCurveTo(17, -30, 15.5, -9);
+  if (L.big) { ctx.lineTo(12, -17); ctx.lineTo(8, -15); ctx.lineTo(5, -20); ctx.lineTo(0, -16); ctx.lineTo(-5, -20); ctx.lineTo(-8, -15); ctx.lineTo(-12, -17); }
+  else {
+    ctx.quadraticCurveTo(12, -19, 9, -16); ctx.quadraticCurveTo(6, -20, 2, -17); ctx.quadraticCurveTo(-2, -21, -6, -16);
+    ctx.quadraticCurveTo(-10, -19, -12, -14); ctx.quadraticCurveTo(-14, -12, -15.5, -9);
+  }
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  if (L.long) { ell(-14, -5, 3.4, 9, L.hair, .15, 2); ell(14, -5, 3.4, 9, L.hair, -.15, 2); }
+  if (L.big) { tri(-10, -26, -4, -36, 0, -27, L.hair, 2.5); tri(-2, -28, 4, -38, 7, -27, L.hair, 2.5); tri(5, -26, 13, -33, 12, -22, L.hair, 2.5); }
+  ctx.save(); ctx.strokeStyle = L.hair2; ctx.lineWidth = 2.2; ctx.globalAlpha *= .85; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(-2, -17, 10, 3.65, 4.55); ctx.stroke(); ctx.restore();
+  if (L.band) { ctx.fillStyle = L.band; ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(-15, -21, 30, 4.5, 2); ctx.fill(); ctx.stroke(); tri(-14, -19, -23 - sway * 2, -15, -21, -21, L.band, 1.5); }
+  if (an.blink) { closedEye(-5.5, -8); closedEye(5.5, -8); }
+  else for (const ex of [-5.5, 5.5]) {
+    ell(ex, -9, 3.4, 4.4, '#ffffff', 0, 1.6);
+    ctx.fillStyle = paint(L.eyes, ex + lx, -8.5 + ly, 3.6); ctx.beginPath(); ctx.ellipse(ex + lx, -8.5 + ly, 2.4, 3.2, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(ex + lx, -8.2 + ly, 1.15, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ex + lx - .9, -10 + ly, .95, 0, 7); ctx.fill();
+  }
+  if (!L.big) { ctx.strokeStyle = INK; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.moveTo(-9.6, -12.2); ctx.lineTo(-8, -11); ctx.moveTo(9.6, -12.2); ctx.lineTo(8, -11); ctx.stroke(); }
+  ctx.fillStyle = 'rgba(255,110,140,.45)'; ctx.beginPath(); ctx.arc(-9, -3.5, 2.6, 0, 7); ctx.arc(9, -3.5, 2.6, 0, 7); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = 1.6; ctx.lineCap = 'round';
+  if (cast > 0) { ctx.fillStyle = '#7a2a3a'; ctx.beginPath(); ctx.ellipse(0, -2.5, 2, 2.4, 0, 0, 7); ctx.fill(); }
+  else { ctx.beginPath(); ctx.arc(0, -4.5, 2.6, .2 * Math.PI, .8 * Math.PI); ctx.stroke(); }
+  ctx.lineCap = 'butt';
+  if (key === 'linnea') heart(9.5, -24, .42, '#ff5fa2', 1.2);
+  if (key === 'maja') {
+    ctx.fillStyle = '#ffe58a'; ctx.beginPath(); ctx.arc(-9, -24, 3.6, 0, 7); ctx.fill();
+    ctx.fillStyle = L.hair; ctx.beginPath(); ctx.arc(-7.6, -25, 3, 0, 7); ctx.fill();
+  }
+  ctx.save(); ctx.translate(hx, hy);
+  if (key === 'linnea') {
+    heart(Math.cos(ang) * 6, Math.sin(ang) * 6 - 2 + Math.sin(T * 4) * 1.5, .75 + cast * .5, '#ff5fa2', 1.5, 10 + Math.sin(T * 5) * 4);
+  } else if (key === 'torsten') {
+    // Hilda the hammer rests on the shoulder and swings down at the target
+    const sw = an.swing || 0;
+    ctx.rotate(-1.6 + (ang + 1.6) * sw);
+    ctx.fillStyle = '#8a5a2b'; ctx.strokeStyle = INK; ctx.lineWidth = 1.8; rr(-2, -2, 24, 4, 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = vpaint('#9aa3b5', -9, 18); rr(19, -9, 13, 18, 3); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ff9b21'; ctx.fillRect(23.5, -9, 4, 18);
+  } else {
+    ctx.rotate(ang);
+    ctx.strokeStyle = INK; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.beginPath(); ctx.arc(-2, 0, 12, -1.15, 1.15); ctx.stroke();
+    ctx.strokeStyle = '#ffe58a'; ctx.lineWidth = 2.6; ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(2.9, -10.9); ctx.lineTo(2.9 - (an.swing || 0) * 5, 0); ctx.lineTo(2.9, 10.9); ctx.stroke();
+    ctx.lineCap = 'butt';
+  }
+  ctx.restore();
+  ctx.restore();
+}
 // mood: null = no face (boss envelopes), 'ok' or 'scared'
 function balloonBody(x, by, r, col, f, flash, mood) {
   ell(x, by, r * .85, r * 1.05, col);
@@ -899,19 +1377,57 @@ function balloonBody(x, by, r, col, f, flash, mood) {
   else { ctx.beginPath(); ctx.arc(x, by + r * .1, r * .25, .2 * Math.PI, .8 * Math.PI); ctx.stroke(); }
   ctx.lineCap = 'butt';
 }
+// minions: a balloon body on little marching feet, with gear that shows the kind
 function drawBalloon(x, y, r, color, f, flash, alpha = 1, mood = 'ok') {
-  const by = y - r * .2, col = flash ? '#ffffff' : f.plat ? '#aeb6c4' : color;
+  const by = y - r * .25, col = flash ? '#ffffff' : f.plat ? '#aeb6c4' : color, K = KINDS[f.kind];
+  const step = f.d != null ? Math.sin(f.d * .22) : 0;
   ctx.save(); ctx.globalAlpha *= f.camo ? alpha * .6 : alpha;
-  ctx.strokeStyle = INK; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, by + r * 1.05);
-  ctx.quadraticCurveTo(x + 6, by + r * 1.5, x - 3, by + r * 1.9); ctx.stroke();
-  tri(x, by + r * .95, x - 4, by + r * 1.25, x + 4, by + r * 1.25, col, 2.5);
+  ctx.fillStyle = 'rgba(20,10,30,.25)'; ctx.beginPath(); ctx.ellipse(x, by + r * 1.18, r * .85, r * .26, 0, 0, 7); ctx.fill();
+  if (r >= 8) {
+    const fy = by + r * 1.02;
+    ell(x - r * .4, fy - Math.max(0, step) * r * .25, r * .27, r * .18, '#3b2a4a', 0, 1.5);
+    ell(x + r * .4, fy - Math.max(0, -step) * r * .25, r * .27, r * .18, '#3b2a4a', 0, 1.5);
+  }
   balloonBody(x, by, r, col, f, flash, mood);
+  if (K && !flash) gear(K.gear, x, by, r);
+  if (f.charmT > 0) heart(x, by - r * 1.55 - Math.abs(Math.sin(T * 6)) * 3, .55, '#ff5fa2', 1);
   if (f.slowT > 0) {
     ctx.fillStyle = 'rgba(160,220,255,.45)'; ctx.beginPath(); ctx.ellipse(x, by, r * .85, r * 1.05, 0, 0, 7); ctx.fill();
     ctx.fillStyle = '#ffffff'; for (const [a, b] of [[-.6, -.9], [.7, -.6], [.1, -1.2]]) { ctx.beginPath(); ctx.arc(x + a * r, by + b * r, 2, 0, 7); ctx.fill(); }
   }
   if (f.stunT > 0) { ctx.strokeStyle = '#bfeaff'; ctx.lineWidth = 3; rr(x - r, by - r * 1.15, r * 2, r * 2.3, 6); ctx.stroke(); }
   ctx.restore();
+}
+function gear(kind, x, by, r) {
+  ctx.strokeStyle = INK; ctx.lineWidth = 1.8;
+  if (kind === 'sword') {
+    ctx.fillStyle = paint('#c7ccd6', x, by - r * .8, r * .7);
+    ctx.beginPath(); ctx.ellipse(x, by - r * .6, r * .64, r * .48, 0, Math.PI, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#e53935'; ctx.beginPath(); ctx.ellipse(x, by - r * 1.13, r * .13, r * .24, 0, 0, 7); ctx.fill();
+    ctx.save(); ctx.translate(x + r * .95, by + r * .25); ctx.rotate(-.45 + Math.sin(T * 6 + x) * .18);
+    ctx.fillStyle = '#e8d3a8'; rr(-r * .1, -r * 1, r * .2, r * 1, 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#8a5a2b'; ctx.fillRect(-r * .3, -r * .08, r * .6, r * .16); ctx.restore();
+  } else if (kind === 'band') {
+    ctx.fillStyle = '#e53935'; rr(x - r * .8, by - r * .62, r * 1.6, r * .26, 2); ctx.fill(); ctx.stroke();
+    const fl = Math.sin(T * 12 + x) * r * .12;
+    tri(x - r * .75, by - r * .5, x - r * 1.5, by - r * .7 + fl, x - r * 1.4, by - r * .3 - fl, '#e53935', 1.5);
+    ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    for (const k of [-.2, .25]) { ctx.beginPath(); ctx.moveTo(x - r * 1.3, by + r * k); ctx.lineTo(x - r * 1.8, by + r * k); ctx.stroke(); }
+    ctx.lineCap = 'butt';
+  } else if (kind === 'horns') {
+    tri(x - r * .55, by - r * .7, x - r * 1.05, by - r * 1.35, x - r * .25, by - r * .9, '#fff3d6', 1.6);
+    tri(x + r * .55, by - r * .7, x + r * 1.05, by - r * 1.35, x + r * .25, by - r * .9, '#fff3d6', 1.6);
+    ctx.fillStyle = paint('#8a8f9c', x, by - r * .8, r * .8); ctx.strokeStyle = INK; ctx.lineWidth = 1.8;
+    ctx.beginPath(); ctx.ellipse(x, by - r * .55, r * .72, r * .55, 0, Math.PI, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+    circ(x - r * .78, by + r * .35, r * .42, '#b5834a', 1.8); circ(x - r * .78, by + r * .35, r * .14, '#ffd23b', 1.2);
+  } else if (kind === 'kids') {
+    // three tiny sword minions ride on top, and pop out when this one pops
+    [[-.45, -1.02], [.45, -1.02], [0, -1.22]].forEach(([a, b], i) => {
+      const bx = x + a * r, bb = by + b * r + Math.sin(T * 5 + i * 2) * 1.2;
+      circ(bx, bb, r * .26, '#ff4d4d', 1.4);
+      ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(bx - r * .08, bb - r * .03, r * .045 + .4, 0, 7); ctx.arc(bx + r * .08, bb - r * .03, r * .045 + .4, 0, 7); ctx.fill();
+    });
+  }
 }
 function drawBossBalloon(x, y, b, f, flash, s = 1) {
   const col = flash ? '#ffffff' : f.plat ? '#aeb6c4' : b.color;
@@ -962,49 +1478,100 @@ function drawDeco(d) {
     ctx.fillStyle = d.col === '#ffffff' ? '#ff9b21' : '#ffc72c'; ctx.beginPath(); ctx.ellipse(d.x, d.y, 5, 2.5, d.x % 3, 0, 7); ctx.fill();
   }
 }
-function drawGround() {
-  const th = g.theme, L = g.L;
+// the static part of a level is painted once into an offscreen canvas at 2x
+function buildBg(i) {
+  const def = LEVELS[i];
+  if (def.bg) return def.bg;
+  const c = document.createElement('canvas'); c.width = W * 2; c.height = H * 2;
+  const keep = ctx, keepT = T;
+  ctx = c.getContext('2d'); ctx.scale(2, 2); T = 0;
+  try { paintGround(def.L, THEMES[i], i); } finally { ctx = keep; T = keepT; }
+  return def.bg = c;
+}
+function oakCenter(L) {
+  let x = 0, y = 0, n = 0;
+  for (const [key, kind] of L.blocked) if (kind === 'oak') { const [c, r] = key.split(',').map(Number); x += c * CS + CS / 2; y += GY + r * CS + CS / 2; n++; }
+  return n ? { x: x / n, y: y / n } : null;
+}
+function paintGround(L, th, idx) {
   ctx.fillStyle = th.grass; ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = 'rgba(255,255,255,.06)';
+  // loose painted blotches of warm light and cool shade
+  for (let i = 0; i < 80; i++) {
+    const x = rnd(i, 1, idx) * W, y = GY + rnd(i, 2, idx) * ROWS * CS, r = 40 + rnd(i, 3, idx) * 100, lite = rnd(i, 4, idx) < .5;
+    const gr = ctx.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, lite ? 'rgba(255,248,190,.16)' : 'rgba(20,50,60,.16)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gr; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  ctx.fillStyle = 'rgba(255,255,255,.045)';
   for (let c = 0; c < COLS; c++) for (let r = 0; r < ROWS; r++) if ((c + r) & 1) ctx.fillRect(c * CS, GY + r * CS, CS, CS);
+  ctx.lineCap = 'round'; ctx.lineWidth = 1.4;
+  for (let i = 0; i < 1500; i++) {
+    const x = rnd(i, 5, idx) * W, y = GY + rnd(i, 6, idx) * ROWS * CS, h = 3 + rnd(i, 7, idx) * 6, lean = (rnd(i, 8, idx) - .5) * 5;
+    ctx.strokeStyle = rnd(i, 9, idx) < .55 ? 'rgba(20,70,40,.22)' : 'rgba(235,255,190,.2)';
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.quadraticCurveTo(x + lean * .3, y - h * .6, x + lean, y - h); ctx.stroke();
+  }
+  ctx.lineCap = 'butt';
   for (const d of L.deco) drawDeco(d);
-  let oak = null;
   for (const [key, kind] of L.blocked) {
     const [c, r] = key.split(',').map(Number), x = c * CS + CS / 2, y = GY + r * CS + CS / 2;
     if (kind === 'water') {
-      ctx.fillStyle = '#5ec8f0'; rr(c * CS + 1, GY + r * CS + 1, CS - 2, CS - 2, 10); ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 2;
-      const w = Math.sin(T * 2 + c + r) * 3;
-      ctx.beginPath(); ctx.arc(x - 8 + w, y, 7, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
-      ctx.beginPath(); ctx.arc(x + 10 - w, y + 12, 6, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+      ctx.fillStyle = vpaint('#4fbfe8', GY + r * CS - 30, CS + 60); rr(c * CS + 1, GY + r * CS + 1, CS - 2, CS - 2, 10); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.18)'; rr(c * CS + 5, GY + r * CS + 4, CS - 10, 10, 5); ctx.fill();
       if ((c + r) % 3 === 0) { ell(x + 10, y - 12, 8, 5, '#4cbb57', 0, 2); circ(x + 13, y - 13, 2.5, '#ff8fb8', 1); }
     } else if (kind === 'tree') {
-      ctx.fillStyle = 'rgba(0,0,0,.2)'; ctx.beginPath(); ctx.ellipse(x + 4, y + 22, 22, 7, 0, 0, 7); ctx.fill();
-      ctx.fillStyle = '#8a5a2b'; ctx.strokeStyle = INK; ctx.lineWidth = 2.5; rr(x - 5, y, 10, 22, 3); ctx.fill(); ctx.stroke();
-      circ(x, y - 6, 22, '#2f8f3a'); circ(x - 7, y - 12, 8, '#45a84f', 0); circ(x + 8, y - 2, 3, '#e53935', 1.5);
+      ctx.fillStyle = 'rgba(20,10,30,.28)'; ctx.beginPath(); ctx.ellipse(x + 6, y + 22, 25, 8, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = vpaint('#8a5a2b', y, 22); ctx.strokeStyle = INK; ctx.lineWidth = 2.5; rr(x - 5, y, 10, 22, 3); ctx.fill(); ctx.stroke();
+      circ(x - 10, y - 2, 13, '#2a7f35'); circ(x + 10, y - 2, 13, '#2a7f35'); circ(x, y - 10, 19, '#2f8f3a');
+      circ(x - 6, y - 16, 6, 'rgba(255,255,220,.22)', 0); circ(x + 8, y - 2, 3, '#e53935', 1.5);
     } else if (kind === 'rock') {
-      ell(x, y + 6, 22, 16, '#a3a9b5'); ell(x - 6, y, 8, 5, '#c5cad6', 0, 0); ell(x + 9, y + 14, 6, 3, '#6fbf5a', 0, 0);
+      ctx.fillStyle = 'rgba(20,10,30,.25)'; ctx.beginPath(); ctx.ellipse(x + 4, y + 18, 24, 7, 0, 0, 7); ctx.fill();
+      ell(x, y + 6, 22, 16, '#a3a9b5'); ell(x - 6, y, 8, 5, 'rgba(255,255,255,.35)', 0, 0); ell(x + 9, y + 14, 6, 3, '#6fbf5a', 0, 0);
     } else if (kind === 'berrybush') {
       drawDeco({ kind: 'berry', x, y });
-    } else if (kind === 'oak') {
-      oak = oak || { x: 0, y: 0, n: 0 }; oak.x += x; oak.y += y; oak.n++;
     }
   }
-  // the path, with a soft drop shadow and pebbles
+  const oak = oakCenter(L);
+  if (oak) {
+    const { x, y } = oak;
+    ctx.fillStyle = 'rgba(20,10,30,.3)'; ctx.beginPath(); ctx.ellipse(x + 8, y + 50, 60, 14, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = vpaint('#7a4a22', y - 10, 56); ctx.strokeStyle = INK; ctx.lineWidth = 3; rr(x - 14, y - 10, 28, 56, 6); ctx.fill(); ctx.stroke();
+    circ(x - 26, y - 6, 22, '#2a7f35'); circ(x + 26, y - 6, 22, '#2a7f35'); circ(x, y - 22, 46, '#2f8f3a');
+    circ(x - 16, y - 40, 12, 'rgba(255,255,220,.2)', 0);
+  }
+  // the path: drop shadow, ink, edge, dirt, then a lit upper rim and a worn middle for depth
   const trace = () => { ctx.beginPath(); L.pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); };
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.save(); ctx.translate(0, 5); trace(); ctx.strokeStyle = 'rgba(0,0,0,.16)'; ctx.lineWidth = 56; ctx.stroke(); ctx.restore();
+  ctx.save(); ctx.translate(0, 7); trace(); ctx.strokeStyle = 'rgba(20,10,30,.25)'; ctx.lineWidth = 58; ctx.stroke(); ctx.restore();
   trace(); ctx.strokeStyle = INK; ctx.lineWidth = 54; ctx.stroke();
   trace(); ctx.strokeStyle = th.edge; ctx.lineWidth = 48; ctx.stroke();
   trace(); ctx.strokeStyle = th.path; ctx.lineWidth = 40; ctx.stroke();
+  ctx.save(); ctx.translate(0, -4); trace(); ctx.strokeStyle = 'rgba(255,250,225,.4)'; ctx.lineWidth = 32; ctx.stroke(); ctx.restore();
+  ctx.save(); ctx.translate(0, 3); trace(); ctx.strokeStyle = th.path; ctx.lineWidth = 30; ctx.stroke(); ctx.restore();
+  trace(); ctx.strokeStyle = 'rgba(120,70,30,.12)'; ctx.lineWidth = 16; ctx.stroke();
   ctx.lineCap = 'butt';
-  ctx.fillStyle = 'rgba(120,80,40,.35)';
-  for (const p of L.pebbles) { ctx.beginPath(); ctx.ellipse(p.x, p.y, p.r * 1.3, p.r, 0, 0, 7); ctx.fill(); }
+  for (const p of L.pebbles) {
+    ctx.fillStyle = 'rgba(90,55,25,.4)'; ctx.beginPath(); ctx.ellipse(p.x, p.y + 1, p.r * 1.3, p.r, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,245,220,.5)'; ctx.beginPath(); ctx.ellipse(p.x - .4, p.y - .6, p.r * .8, p.r * .5, 0, 0, 7); ctx.fill();
+  }
+  // key light from the top left
+  const lg = ctx.createLinearGradient(0, GY, W, PY);
+  lg.addColorStop(0, 'rgba(255,236,190,.16)'); lg.addColorStop(.5, 'rgba(0,0,0,0)'); lg.addColorStop(1, 'rgba(30,20,80,.18)');
+  ctx.fillStyle = lg; ctx.fillRect(0, GY, W, ROWS * CS);
+}
+function drawGround() {
+  const L = g.L;
+  ctx.drawImage(LEVELS[g.lv].bg, 0, 0, W, H);
+  for (const [key, kind] of L.blocked) {
+    if (kind !== 'water') continue;
+    const [c, r] = key.split(',').map(Number), x = c * CS + CS / 2, y = GY + r * CS + CS / 2;
+    ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 2;
+    const w = Math.sin(T * 2 + c + r) * 3;
+    ctx.beginPath(); ctx.arc(x - 8 + w, y, 7, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x + 10 - w, y + 12, 6, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+  }
+  const oak = oakCenter(L);
   if (oak) {
-    const x = oak.x / oak.n, y = oak.y / oak.n;
-    ctx.fillStyle = '#7a4a22'; ctx.strokeStyle = INK; ctx.lineWidth = 3; rr(x - 14, y - 10, 28, 56, 6); ctx.fill(); ctx.stroke();
-    circ(x, y - 22, 46, '#2f8f3a'); circ(x - 26, y - 6, 22, '#2f8f3a'); circ(x + 26, y - 6, 22, '#2f8f3a');
-    circ(x - 16, y - 40, 12, '#45a84f', 0);
+    const { x, y } = oak;
     ctx.save(); ctx.shadowColor = '#ffd23b'; ctx.shadowBlur = 16 + Math.sin(T * 3) * 6;
     tri(x - 8, y + 34, x + 8, y + 34, x, y + 58, '#ffd23b'); ctx.restore();
     ell(x - 3, y + 28, 3, 7, '#4cbb57', -.5, 2); ell(x + 3, y + 28, 3, 7, '#4cbb57', .5, 2);
@@ -1012,20 +1579,40 @@ function drawGround() {
   // carrot store at the end of the path
   const ex = L.exit.x, ey = L.exit.y;
   ell(ex, ey + 8, 20, 11, '#5a3a1a');
-  const n = Math.min(3, Math.ceil(g.lives / 7));
+  const n = Math.min(3, Math.ceil(g.lives / (BAL.lives / 3)));
   if (n >= 1) carrotIcon(ex, ey - 6, .85, 0);
   if (n >= 2) carrotIcon(ex - 9, ey - 2, .8, -.4);
   if (n >= 3) carrotIcon(ex + 9, ey - 2, .8, .4);
 }
 function drawAmbient() {
-  // drifting cloud shadows and a soft vignette over the field
-  ctx.fillStyle = 'rgba(0,0,0,.06)';
+  // drifting cloud shadows
+  ctx.fillStyle = 'rgba(20,10,40,.07)';
   for (let i = 0; i < 2; i++) {
     const x = ((T * 14 + i * 420) % 900) - 180, y = GY + 180 + i * 380;
     ctx.beginPath(); ctx.ellipse(x, y, 130, 60, 0, 0, 7); ctx.ellipse(x + 80, y + 20, 90, 45, 0, 0, 7); ctx.fill();
   }
-  const vg = ctx.createRadialGradient(W / 2, GY + ROWS * CS / 2, 260, W / 2, GY + ROWS * CS / 2, 620);
-  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.2)');
+  ctx.save();
+  // colour grade: warm highlights, violet-teal shadows, like a painted film frame
+  ctx.globalCompositeOperation = 'soft-light';
+  const lg = ctx.createLinearGradient(0, GY, W * .6, PY);
+  lg.addColorStop(0, 'rgba(255,200,120,.55)'); lg.addColorStop(1, 'rgba(40,70,150,.5)');
+  ctx.fillStyle = lg; ctx.fillRect(0, GY, W, ROWS * CS);
+  // light shafts and floating dust
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 3; i++) {
+    const a = .035 + Math.sin(T * .4 + i * 2) * .02, x0 = 60 + i * 170 + Math.sin(T * .2 + i) * 20;
+    ctx.fillStyle = 'rgba(255,236,190,' + a.toFixed(3) + ')';
+    ctx.beginPath(); ctx.moveTo(x0, GY); ctx.lineTo(x0 + 60, GY); ctx.lineTo(x0 + 260, PY); ctx.lineTo(x0 + 150, PY); ctx.closePath(); ctx.fill();
+  }
+  for (let i = 0; i < 22; i++) {
+    const sp = 6 + rnd(i, 3, 7) * 10;
+    const x = (rnd(i, 1, 7) * W + T * sp) % W, y = GY + ((rnd(i, 2, 7) * ROWS * CS - T * sp * .7) % (ROWS * CS) + ROWS * CS) % (ROWS * CS);
+    ctx.fillStyle = 'rgba(255,240,200,' + (.25 + Math.sin(T * 2 + i) * .2).toFixed(3) + ')';
+    ctx.beginPath(); ctx.arc(x, y, 1.2 + rnd(i, 4, 7) * 1.6, 0, 7); ctx.fill();
+  }
+  ctx.restore();
+  const vg = ctx.createRadialGradient(W / 2, GY + ROWS * CS / 2, 240, W / 2, GY + ROWS * CS / 2, 620);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(20,5,40,.32)');
   ctx.fillStyle = vg; ctx.fillRect(0, GY, W, ROWS * CS);
 }
 
@@ -1046,7 +1633,7 @@ function drawStory() {
   card(24, 40, 492, 880, '#fff3d6', 22);
   txt('BERÄTTELSEN', W / 2, 82, 32, '#ff9b21');
   drawRabbit(0, 170, 180 - Math.abs(Math.sin(T * 3)) * 8, 0, 0, 1, 1.7);
-  drawRabbit(1, 250, 196, -.3, 0, 1, 1.2, { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 4) * .1, blink: (T % 3) < .15 });
+  drawHero('linnea', 262, 190, -.3, 1.6, { lift: Math.abs(Math.sin(T * 2.4)) * 6, blink: (T % 3) < .13 });
   drawBossBalloon(390 + Math.sin(T) * 6, 175 + Math.cos(T * .8) * 5, BOSSES.rufus, {}, false, 1.25);
   let y = 270;
   for (const p of STORY) y = para(p, 50, y, 440, 16) + 10;
@@ -1071,7 +1658,7 @@ function placeIcon(i, x, y, un) {
 function drawMenu() {
   drawSky();
   drawRabbit(0, 66, 154, -.3, 0, 1, 1.1, { lift: Math.abs(Math.sin(T * 2.6)) * 10, sx: 1, sy: 1, ear: Math.sin(T * 3) * .1, blink: (T % 3.3) < .15 });
-  drawRabbit(2, 474, 154, Math.PI + .3, 0, 1, 1.1, { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 3 + 1) * .1, blink: ((T + 1.2) % 3.7) < .15 });
+  drawHero('linnea', 474, 158, Math.PI + .3, 1.25, { lift: Math.abs(Math.sin(T * 2.2)) * 6, blink: ((T + 1.2) % 3.7) < .13 });
   txt('KANIN', W / 2, 110 + Math.sin(T * 2) * 3, 60, '#ffd93b');
   txt('VÄKTARNA', W / 2, 164 + Math.sin(T * 2 + .5) * 3, 46, '#ff7ad9');
   txt('★ ' + totalStars() + ' / ' + LEVELS.length * 3, W / 2, 206, 22, '#ffd93b');
@@ -1088,7 +1675,10 @@ function drawMenu() {
   LEVELS.forEach((l, i) => {
     const [x, y0] = MAP[i], un = levelUnlocked(i), y = y0 + (i === here ? Math.sin(T * 3) * 3 : 0);
     const run = save.run && save.run.lv === i ? save.run : null;
-    btns.push({ x: x - 62, y: y - 40, w: 124, h: 116, fn: un ? () => { startLevel(i, run); sfx(500, .12, 'triangle', .05, 400); } : null });
+    btns.push({ x: x - 62, y: y - 40, w: 124, h: 116, fn: un ? () => {
+      sfx(500, .12, 'triangle', .05, 400);
+      if (run) menuAsk = { lv: i, run }; else startLevel(i);
+    } : null });
     if (i === here) { ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(x, y, 40 + Math.sin(T * 4) * 3, 0, 7); ctx.stroke(); }
     placeIcon(i, x, y, un);
     card(x - 62, y + 38, 124, 40, run ? '#c9f2b8' : un ? '#fff3d6' : '#c5cad6', 10);
@@ -1098,34 +1688,76 @@ function drawMenu() {
     if (un) drawPredator(BOSSES[l.bosses[l.waves]].animal, x + 34, y - 28, .5);
     if (i === here) drawRabbit(0, x - 42, y - 30 - Math.abs(Math.sin(T * 5)) * 8, 0, 0, 1, .6);
   });
-  card(30, 682, 480, 146, 'rgba(255,243,214,.96)');
-  txt('KANINVÄKTARE', W / 2, 702, 16, INK, 'center', null);
-  RABBITS.forEach((R, i) => {
-    const x = 30 + i * 80 + 40, un = rabbitUnlocked(i);
-    drawRabbit(i, x, 750, -.5, 0, un ? 1 : .3, .9, un ? { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 3 + i) * .08, blink: ((T + i * .7) % 4) < .15 } : null);
-    txt(R.short, x, 792, 12, un ? INK : '#7a7f94', 'center', null);
-    txt(un ? 'MED' : 'SLÅ ' + BOSSES[R.unlockBy].short, x, 810, 11, un ? '#2f9e44' : '#7a7f94', 'center', null);
+  card(20, 676, 500, 158, 'rgba(255,243,214,.96)');
+  txt('HJÄLTAR', 98, 694, 14, INK, 'center', null);
+  HERO_KEYS.forEach((key, i) => {
+    const x = 46 + i * 52, un = heroUnlocked(key);
+    ctx.save(); if (!un) ctx.globalAlpha = .3;
+    drawHero(key, x, 748, -.4, .9, { lift: un ? Math.abs(Math.sin(T * 2.5 + i)) * 4 : 0, blink: ((T + i) % 4) < .13, seed: i });
+    ctx.restore();
+    txt(un ? HEROES[key].name : '???', x, 798, 10, un ? HEROES[key].color : '#7a7f94', 'center', null);
   });
-  btn(30, 846, 150, 56, 'BERÄTTELSE', '#ff9b21', () => { scene = 'story'; }, { size: 15 });
-  btn(195, 846, 150, 56, save.muted ? 'LJUD: AV' : 'LJUD: PÅ', '#4d8dff', () => { save.muted = !save.muted; persist(); }, { size: 15 });
-  btn(360, 846, 150, 56, 'NOLLSTÄLL', '#ff5a5a', () => {
-    if (confirm('Radera all progress?')) { save.stars = [0, 0, 0, 0, 0]; save.seen = {}; save.rabbits = [0, 1]; save.run = null; persist(); }
-  }, { size: 15 });
+  ctx.strokeStyle = 'rgba(59,36,16,.25)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(182, 688); ctx.lineTo(182, 822); ctx.stroke();
+  txt('KANINVÄKTARE', 350, 694, 14, INK, 'center', null);
+  RABBITS.forEach((R, i) => {
+    const x = 250 + (i % 3) * 100, y = i < 3 ? 728 : 792, un = rabbitUnlocked(i);
+    drawRabbit(i, x, y, -.5, 0, un ? 1 : .3, .6, un ? { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 3 + i) * .08, blink: ((T + i * .7) % 4) < .15 } : null);
+    txt(un ? R.short : 'SLÅ ' + BOSSES[R.unlockBy].short, x, y + 26, 9, un ? INK : '#7a7f94', 'center', null);
+  });
+  const row = [
+    ['BERÄTTELSE', '#ff9b21', () => { scene = 'story'; }],
+    [save.muted ? 'LJUD: AV' : 'LJUD: PÅ', '#4d8dff', () => { save.muted = !save.muted; persist(); }],
+    [save.auto ? 'AUTOSTART\nPÅ' : 'AUTOSTART\nAV', save.auto ? '#7d8cff' : '#8a8f9c', () => { save.auto = !save.auto; persist(); }],
+    ['NOLLSTÄLL', '#ff5a5a', () => {
+      if (confirm('Radera all progress?')) { save.stars = [0, 0, 0, 0, 0]; save.seen = {}; save.rabbits = [0, 1]; save.run = null; persist(); }
+    }],
+  ];
+  row.forEach(([label, col, fn], i) => btn(20 + i * 127, 846, 119, 56, label, col, fn, { size: 13 }));
+  if (menuAsk) drawMenuAsk();
+}
+// a saved run waits on the map: continue it or start the place over
+function drawMenuAsk() {
+  const { lv, run } = menuAsk;
+  btns.push({ x: 0, y: 0, w: W, h: H, fn: () => { menuAsk = null; } });
+  ctx.fillStyle = 'rgba(20,10,0,.55)'; ctx.fillRect(0, 0, W, H);
+  card(50, 280, 440, 380, '#fff3d6', 22);
+  btns.push({ x: 50, y: 280, w: 440, h: 380, fn: null });
+  txt(LEVELS[lv].name, W / 2, 326, 26, '#ff9b21');
+  txt('Du har ett sparat spel på våg ' + (run.wave + 1) + ' med ' + run.lives + ' morötter.', W / 2, 364, 13, '#8a6a3a', 'center', null);
+  btn(100, 396, 340, 66, 'FORTSÄTT VÅG ' + (run.wave + 1), '#3fbf5a', () => { menuAsk = null; startLevel(lv, run); }, { size: 21 });
+  btn(100, 476, 340, 66, 'BÖRJA OM', '#ff9b21', () => { menuAsk = null; startLevel(lv); }, { size: 21 });
+  btn(100, 568, 340, 60, 'AVBRYT', '#8a8f9c', () => { menuAsk = null; }, { size: 18 });
 }
 
 function drawPlay() {
   ctx.save();
   if (g.shake > 0) ctx.translate((Math.random() - .5) * g.shake * 24, (Math.random() - .5) * g.shake * 24);
   drawGround();
-  const ghost = g.moving ? g.moving.type : g.armed;
-  if (g.hover && ghost >= 0 && !g.result) {
+  const ghost = g.moving ? g.moving.type : g.armed, hg = g.heroMove && g.hero;
+  if (g.hover && (ghost >= 0 || hg) && !g.result) {
     const { c, r } = g.hover, x = c * CS + CS / 2, y = GY + r * CS + CS / 2;
-    const ok = canBuild(c, r), range = g.moving ? g.moving.s.range : RABBITS[ghost].base.range;
+    const ok = canBuild(c, r), range = hg ? g.hero.s.range : g.moving ? g.moving.s.range : RABBITS[ghost].base.range;
     ctx.fillStyle = ok ? 'rgba(255,255,255,.25)' : 'rgba(255,60,60,.35)'; ctx.fillRect(c * CS, GY + r * CS, CS, CS);
-    if (ok) { if (range) drawRange(x, y, range); drawRabbit(ghost, x, y, 0, 0, .7); }
+    if (ok) { if (range) drawRange(x, y, range); if (hg) drawHero(g.hero.key, x, y, 0, 1, {}); else drawRabbit(ghost, x, y, 0, 0, .7); }
   }
   if (g.sel && g.sel.s.range) drawRange(g.sel.x, g.sel.y, g.sel.s.range);
-  for (const t of g.towers.slice().sort((a, b) => a.y - b.y)) {
+  const h = g.hero;
+  if (h) {
+    // glowing ring under the hero, like a champion marker
+    ctx.save(); ctx.strokeStyle = h.H.color; ctx.lineWidth = 3; ctx.globalAlpha = .7 + Math.sin(T * 4) * .2;
+    ctx.shadowColor = h.H.color; ctx.shadowBlur = 10;
+    ctx.beginPath(); ctx.ellipse(h.x, h.y + 22, 24, 8.5, 0, 0, 7); ctx.stroke(); ctx.restore();
+  }
+  const actors = g.towers.slice(); if (h) actors.push(h);
+  for (const t of actors.sort((a, b) => a.y - b.y)) {
+    if (t.hero) {
+      const lift = t.hop > 0 ? Math.sin(Math.min(1, 1 - (t.hop - .1) / .5) * Math.PI) * 16 : Math.abs(Math.sin(T * 2.4 + t.seed)) * 1.5;
+      drawHero(t.key, t.x, t.y, t.ang, 1.05, { lift: Math.max(0, lift), cast: t.cast / .4, swing: t.kick / .15, seed: t.seed, blink: ((T + t.seed) % 4.5) < .13 });
+      if (g.heroMove) { ctx.globalAlpha = .5 + Math.sin(T * 8) * .3; txt('FLYTTAS', t.x, t.y - 52, 13, '#fff'); ctx.globalAlpha = 1; }
+      circ(t.x + 19, t.y + 14, 9, t.H.color, 2); txt(String(t.lvl), t.x + 19, t.y + 14.5, 11, '#fff', 'center', null);
+      if (t === g.sel) { ctx.strokeStyle = '#ffd23b'; ctx.lineWidth = 3; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.ellipse(t.x, t.y + 22, 28, 10, 0, 0, 7); ctx.stroke(); ctx.setLineDash([]); }
+      continue;
+    }
     const lift = t.hop > 0 ? Math.sin(Math.min(1, 1 - (t.hop - .1) / .5) * Math.PI) * 14 : 0;
     const k = t.kick > 0 ? t.kick / .12 : 0, bob = Math.sin(T * 2.4 + t.seed) * .03;
     const moving = t === g.moving;
@@ -1145,7 +1777,12 @@ function drawPlay() {
   }
   for (const p of g.projs) {
     ctx.save(); ctx.translate(p.x, p.y);
-    if (p.type === 0) { ctx.rotate(p.a); ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(-8, 0); ctx.lineTo(4, 0); ctx.stroke(); tri(4, -3, 4, 3, 10, 0, '#cfd6e0', 1.5); }
+    if (p.htype === 'linnea') heart(0, 0, .85, '#ff5fa2', 1.5, 12);
+    else if (p.htype === 'maja') {
+      ctx.rotate(p.a); ctx.shadowColor = '#bfc8ff'; ctx.shadowBlur = 12;
+      ctx.strokeStyle = '#eef0ff'; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(6, 0); ctx.stroke();
+      tri(5, -4, 5, 4, 12, 0, '#ffe58a', 1.5);
+    } else if (p.type === 0) { ctx.rotate(p.a); ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(-8, 0); ctx.lineTo(4, 0); ctx.stroke(); tri(4, -3, 4, 3, 10, 0, '#cfd6e0', 1.5); }
     else if (p.type === 1) circ(0, 0, 5, '#ffffff', 2);
     else if (p.type === 2) { ctx.rotate(T * 10); tri(-5, -5, -5, 5, 9, 0, '#ff9b21', 2); }
     else { ctx.rotate(T * 14); ctx.strokeStyle = INK; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(-6, -6); ctx.lineTo(2, 0); ctx.lineTo(-6, 6); ctx.stroke(); ctx.strokeStyle = '#c98b4a'; ctx.lineWidth = 2.5; ctx.stroke(); }
@@ -1155,9 +1792,24 @@ function drawPlay() {
     if (b.ring) { const k = 1 - b.life / b.max; ctx.strokeStyle = b.color; ctx.lineWidth = 5; ctx.globalAlpha = 1 - k; ctx.beginPath(); ctx.arc(b.x1, b.y1, b.r * (.4 + .6 * k), 0, 7); ctx.stroke(); ctx.globalAlpha = 1; }
     else { ctx.lineCap = 'round'; ctx.strokeStyle = INK; ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(b.x1, b.y1); ctx.lineTo(b.x2, b.y2); ctx.stroke(); ctx.strokeStyle = b.color; ctx.lineWidth = 4; ctx.stroke(); ctx.lineCap = 'butt'; }
   }
+  for (const f of g.hfx) {
+    if (f.kind === 'boomer') {
+      ctx.save(); ctx.translate(f.x, f.y); ctx.rotate(Math.sin(f.rot) * .4);
+      heart(0, 0, 2.4, '#ff5fa2', 2.5, 22); ctx.restore();
+    } else if (f.kind === 'star' && f.delay <= 0) {
+      const k = Math.max(0, f.fall / .45), sx = f.t.x + k * 90, sy = f.t.y - k * 320;
+      ctx.save(); ctx.strokeStyle = 'rgba(223,228,255,.6)'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx + 30, sy - 100); ctx.stroke();
+      ctx.shadowColor = '#dfe4ff'; ctx.shadowBlur = 16; ctx.translate(sx, sy); ctx.rotate(T * 8);
+      ctx.fillStyle = '#ffe58a'; ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.beginPath();
+      for (let i = 0; i < 10; i++) { const a = i * Math.PI / 5, rr2 = i % 2 ? 5 : 11; ctx.lineTo(Math.cos(a) * rr2, Math.sin(a) * rr2); }
+      ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
+    }
+  }
   for (const p of g.parts) {
     ctx.globalAlpha = Math.max(0, p.life / p.max);
     if (p.carrot) carrotIcon(p.x, p.y, .6, p.rot);
+    else if (p.heart) heart(p.x, p.y, .6, p.color, 1);
     else {
       ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
       ctx.fillStyle = p.color; ctx.strokeStyle = INK; ctx.lineWidth = 1.5; ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * .7); ctx.strokeRect(-p.size / 2, -p.size / 2, p.size, p.size * .7); ctx.restore();
@@ -1173,8 +1825,8 @@ function drawPlay() {
   ctx.globalAlpha = 1;
   if (g.wave === 0 && !g.towers.length && !g.result) txt('TRYCK PÅ GRÄSET FÖR ATT PLACERA EN KANIN', W / 2, PY - 24, 15, '#fff');
   ctx.restore();
-  drawBubbles(); drawBanner();
-  drawTopInfo(); drawHud(); drawPanel();
+  drawBubbles(); drawBanner(); drawAnnouncer();
+  drawTopInfo(); drawDialog(); drawHud(); drawPanel();
   if (g.result) drawEnd();
   else if (g.modals.length) drawModal(g.modals[0]);
   else if (g.paused) drawPause();
@@ -1206,10 +1858,49 @@ function drawBanner() {
   txt(b.sub, 30, 20, 14, '#fff');
   ctx.restore();
 }
+// big centre text for streaks and warnings, in the style of an arena announcer
+function drawAnnouncer() {
+  const a = g.ann; if (!a) return;
+  const k = a.max - a.life, s = k < .15 ? .6 + k / .15 * .5 : k < .3 ? 1.1 - (k - .15) / .15 * .1 : 1;
+  ctx.save(); ctx.globalAlpha = Math.min(1, a.life / .3); ctx.translate(W / 2, 300); ctx.scale(s, s);
+  const gr = ctx.createLinearGradient(-260, 0, 260, 0);
+  gr.addColorStop(0, 'rgba(20,5,40,0)'); gr.addColorStop(.2, 'rgba(20,5,40,.7)'); gr.addColorStop(.8, 'rgba(20,5,40,.7)'); gr.addColorStop(1, 'rgba(20,5,40,0)');
+  ctx.fillStyle = gr; ctx.fillRect(-270, -34, 540, a.sub ? 78 : 62);
+  ctx.shadowColor = a.color; ctx.shadowBlur = 18;
+  txt(a.text, 0, -2, a.text.length > 18 ? 24 : 32, a.color);
+  ctx.shadowBlur = 0;
+  if (a.sub) txt(a.sub, 0, 28, 14, '#fff');
+  ctx.restore();
+}
+function portrait(who, x, y, r) {
+  ctx.save(); circ(x, y, r, '#fff3d6', 2.5);
+  ctx.beginPath(); ctx.arc(x, y, r - 1.5, 0, 7); ctx.clip();
+  if (who === 'hero') drawHero(g.hero ? g.hero.key : 'linnea', x, y + r * .55, .3, r / 22, { blink: (T % 3) < .12 });
+  else if (who === 'guard') drawRabbit(GUARDS[g.lv].type, x, y + r * .35, .3, 0, 1, r / 26, { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 3) * .08, blink: (T % 3.4) < .12 });
+  else drawPredator(BOSSES[who].animal, x, y + r * .15, r / 24);
+  ctx.restore();
+  ctx.strokeStyle = INK; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke();
+}
+function speakerName(who) {
+  return who === 'hero' ? (g.hero ? g.hero.H.name : 'LINNÉA') : who === 'guard' ? GUARDS[g.lv].name : BOSSES[who].short;
+}
+function drawDialog() {
+  if (!g.dialog.length || g.modals.length || g.result) return;
+  const [who, raw] = g.dialog[0], text = raw.replace('{hero}', heroName());
+  const y = GY + 56, h = 84, k = Math.min(1, g.dlgT / .2), evil = who !== 'hero' && who !== 'guard';
+  btns.push({ x: 8, y, w: W - 16, h, fn: () => { g.dialog.shift(); g.dlgT = 0; } });
+  ctx.save(); ctx.globalAlpha = k;
+  card(8, y, W - 16, h, evil ? '#ffe1d6' : '#fff3d6', 16);
+  portrait(who, 50, y + h / 2, 32);
+  txt(speakerName(who), 92, y + 18, 14, evil ? '#c2410c' : who === 'hero' ? (g.hero ? g.hero.H.color : '#ff5fa2') : '#2f7d32', 'left', null);
+  para(text, 92, y + 40, W - 120, 14, INK);
+  txt('▶', W - 24, y + h - 14, 12, '#8a6a3a', 'center', null);
+  ctx.restore();
+}
 function canBuild(c, r) {
   if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return false;
   const key = c + ',' + r;
-  return !g.L.cells.has(key) && !g.L.blocked.has(key) && !g.towers.some(t => t.c === c && t.r === r);
+  return !g.L.cells.has(key) && !g.L.blocked.has(key) && !g.towers.some(t => t.c === c && t.r === r) && !(g.hero && g.hero.c === c && g.hero.r === r);
 }
 function drawTopInfo() {
   if (g.result) return;
@@ -1260,64 +1951,115 @@ function drawHud() {
     txt('BOSS', 234, 20, 11, '#fff');
     txt(label, 234, 39, n === 0 ? 12 : 15, '#fff');
   }
-  const wl = g.state === 'prep' ? 'VÅG ' + (g.wave + 1) + '/' + g.total + '\n▶ ' + Math.ceil(g.countdown) + 's' : 'VÅG ' + g.wave + '/' + g.total;
+  const wl = g.state === 'prep' ? 'VÅG ' + (g.wave + 1) + '/' + g.total + '\n' + (save.auto ? '▶ ' + Math.ceil(g.countdown) + 's' : '▶ STARTA') : 'VÅG ' + g.wave + '/' + g.total;
   btn(262, 6, 136, 48, wl, '#3fbf5a', nextWaveNow, { size: 15, active: g.state === 'prep' && Math.sin(T * 6) > 0 });
   btn(404, 6, 58, 48, g.speed + 'x', '#ff9b21', () => { g.speed = g.speed % 3 + 1; }, { size: 19 });
   btn(468, 6, 64, 48, 'II', '#4d8dff', () => { g.paused = true; }, { size: 22 });
 }
 function drawPanel() {
   woodBar(PY, H - PY);
-  if (g.moving) {
-    const t = g.moving;
-    drawRabbit(t.type, 38, PY + 58, -.5, t.lvl, 1, 1, { lift: Math.abs(Math.sin(T * 6)) * 6, sx: 1, sy: 1, ear: 0, blink: false });
-    txt('FLYTTA ' + t.name.toUpperCase(), 76, PY + 40, 18, '#fff', 'left');
-    txt('Tryck på en ledig ruta. Kostar ¢ ' + moveCost(t), 76, PY + 70, 13, '#f3dcb5', 'left', null);
-    btn(410, PY + 22, 120, 76, 'AVBRYT', '#ff5a5a', () => { g.moving = null; }, { size: 18 });
+  drawAbilities();
+  if (g.moving || g.heroMove) {
+    const t = g.moving || g.hero;
+    if (t.hero) drawHero(t.key, 36, PY + 56, -.5, .95, { lift: Math.abs(Math.sin(T * 6)) * 6 });
+    else drawRabbit(t.type, 38, PY + 58, -.5, t.lvl, 1, 1, { lift: Math.abs(Math.sin(T * 6)) * 6, sx: 1, sy: 1, ear: 0, blink: false });
+    txt('FLYTTA ' + t.name.toUpperCase(), 76, PY + 40, 17, '#fff', 'left');
+    txt(t.hero ? 'Tryck på en ledig ruta. Gratis!' : 'Tryck på en ledig ruta. ¢ ' + moveCost(t), 76, PY + 70, 13, '#f3dcb5', 'left', null);
+    btn(330, PY + 22, 110, 76, 'AVBRYT', '#ff5a5a', () => { g.moving = null; g.heroMove = false; }, { size: 17 });
     return;
   }
+  if (g.sel && g.sel.hero) { drawHeroPanel(g.sel); return; }
   if (g.sel) {
     const t = g.sel, R = RABBITS[t.type], next = R.ups[t.lvl - 1], sell = Math.floor(t.invested * .7), mc = moveCost(t), rc = rangeCost(t);
-    drawRabbit(t.type, 32, PY + 58, -0.5, t.lvl, 1, .9, { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 3) * .08, blink: (T % 3) < .14 });
-    txt(t.name, 62, PY + 18, 16, '#fff', 'left');
-    txt(R.short.toLowerCase() + ' · ' + t.pops + ' poppade', 62, PY + 37, 11, '#f3dcb5', 'left', null);
-    if (next) para('Nästa: ' + next.desc, 62, PY + 54, 136, 11, '#ffe58a');
-    else txt('Fullt uppgraderad!', 62, PY + 58, 12, '#7dff7d', 'left');
-    if (R.dtype) btn(62, PY + 86, 136, 28, 'MÅL: ' + MODE_NAME[t.mode], '#4d8dff', () => { t.mode = MODES[(MODES.indexOf(t.mode) + 1) % MODES.length]; }, { size: 12 });
-    else txt('Ger ¢ ' + t.s.income + ' per våg', 62, PY + 100, 12, '#ffe58a', 'left');
-    btn(204, PY + 8, 116, 104, next ? 'UPPGRADERA\n' + next.name + '\n¢ ' + next.cost : 'MAX!', '#3fbf5a', () => {
+    drawRabbit(t.type, 28, PY + 58, -0.5, t.lvl, 1, .8, { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 3) * .08, blink: (T % 3) < .14 });
+    txt(t.name, 54, PY + 18, 15, '#fff', 'left');
+    txt(R.short.toLowerCase() + ' · ' + t.pops + ' poppade', 54, PY + 37, 11, '#f3dcb5', 'left', null);
+    if (next) para('Nästa: ' + next.desc, 54, PY + 54, 124, 11, '#ffe58a');
+    else txt('Fullt uppgraderad!', 54, PY + 58, 12, '#7dff7d', 'left');
+    if (R.dtype) btn(54, PY + 86, 124, 28, 'MÅL: ' + MODE_NAME[t.mode], '#4d8dff', () => { t.mode = MODES[(MODES.indexOf(t.mode) + 1) % MODES.length]; }, { size: 11 });
+    else txt('Ger ¢ ' + t.s.income + ' per våg', 54, PY + 100, 12, '#ffe58a', 'left');
+    btn(182, PY + 8, 104, 104, next ? 'UPPGRADERA\n' + next.name + '\n¢ ' + next.cost : 'MAX!', '#3fbf5a', () => {
       if (g.gold >= next.cost) {
         g.gold -= next.cost; t.invested += next.cost; t.lvl++; t.s = stats(t); t.hop = .5;
         sfx(600, .2, 'triangle', .05, 500); burst(t.x, t.y, '#ffd23b', 12); comicPop(t.x, t.y - 46, next.name.toUpperCase() + '!', '#ffd23b');
         say(t, pick(LINES.upgrade));
       } else { pop(t.x, t.y - 20, 'FÖR LITE ¢', '#ff8a8a'); sfx(150, .12, 'sawtooth'); }
-    }, { size: 12, disabled: !next, dim: next && g.gold < next.cost });
-    btn(326, PY + 8, 100, 50, t.rangeUp ? 'RÄCKVIDD\nMAX' : 'RÄCKVIDD\n¢ ' + rc, '#4d8dff', () => {
+    }, { size: 11, disabled: !next, dim: next && g.gold < next.cost });
+    btn(290, PY + 8, 84, 50, t.rangeUp ? 'RÄCKVIDD\nMAX' : 'RÄCKVIDD\n¢ ' + rc, '#4d8dff', () => {
       if (g.gold < rc) { pop(t.x, t.y - 20, 'FÖR LITE ¢', '#ff8a8a'); sfx(150, .12, 'sawtooth'); return; }
       g.gold -= rc; t.invested += rc; t.rangeUp = true; t.s = stats(t); t.hop = .5;
       sfx(700, .2, 'triangle', .05, 300); comicPop(t.x, t.y - 46, 'LÅNG SIKT!', '#4fc3ff'); say(t, pick(LINES.range));
-    }, { size: 12, disabled: t.rangeUp || !R.dtype, dim: g.gold < rc });
-    btn(326, PY + 62, 100, 50, 'FLYTTA\n¢ ' + mc, '#ff9b21', () => {
+    }, { size: 11, disabled: t.rangeUp || !R.dtype, dim: g.gold < rc });
+    btn(290, PY + 62, 84, 50, 'FLYTTA\n¢ ' + mc, '#ff9b21', () => {
       if (g.gold < mc) { pop(t.x, t.y - 20, 'FÖR LITE ¢', '#ff8a8a'); sfx(150, .12, 'sawtooth'); return; }
       g.moving = t; g.sel = null; g.armed = -1; sfx(440, .05);
-    }, { size: 12, dim: g.gold < mc });
-    btn(432, PY + 8, 100, 104, 'SÄLJ\n¢ ' + sell, '#ff5a5a', () => {
+    }, { size: 11, dim: g.gold < mc });
+    btn(378, PY + 8, 66, 104, 'SÄLJ\n¢ ' + sell, '#ff5a5a', () => {
       g.gold += sell; g.towers = g.towers.filter(x => x !== t); g.bubbles = g.bubbles.filter(b => b.obj !== t);
       g.sel = null; g.armed = 0; pop(t.x, t.y - 20, 'Hej då, ' + t.name + '!', '#fff', 15); sfx(300, .12, 'triangle', .05, -100);
-    }, { size: 15 });
+    }, { size: 13 });
     return;
   }
   RABBITS.forEach((R, i) => {
-    const x = 6 + i * 89, un = rabbitUnlocked(i), can = g.gold >= R.cost;
-    btns.push({ x, y: PY + 8, w: 84, h: 106, fn: () => {
+    const x = 4 + i * 74, un = rabbitUnlocked(i), can = g.gold >= R.cost, n = countOf(i), full = n >= R.max;
+    btns.push({ x, y: PY + 8, w: 70, h: 106, fn: () => {
       if (!un) { sfx(150, .12, 'sawtooth'); return; }
       g.armed = g.armed === i ? -1 : i; g.sel = null; sfx(440, .05);
     } });
-    card(x, PY + 8, 84, 104, un ? '#fff3d6' : '#c5cad6', 12);
-    if (g.armed === i) { ctx.strokeStyle = '#3fbf5a'; ctx.lineWidth = 5; rr(x - 1, PY + 7, 86, 106, 13); ctx.stroke(); }
+    card(x, PY + 8, 70, 104, !un ? '#c5cad6' : full ? '#e3d6bd' : '#fff3d6', 12);
+    if (g.armed === i) { ctx.strokeStyle = '#3fbf5a'; ctx.lineWidth = 5; rr(x - 1, PY + 7, 72, 106, 13); ctx.stroke(); }
     const sel = g.armed === i;
-    drawRabbit(i, x + 42, PY + 50, -0.5, 0, un ? 1 : .3, .85, un ? { lift: sel ? Math.abs(Math.sin(T * 6)) * 5 : 0, sx: 1, sy: 1, ear: 0, blink: ((T + i) % 5) < .14 } : null);
-    if (un) { txt(R.short, x + 42, PY + 86, 12, INK, 'center', null); coin(x + 26, PY + 102, 6); txt(String(R.cost), x + 36, PY + 102, 13, can ? '#8a5a00' : '#d32f2f', 'left', null); }
-    else { txt('SLÅ', x + 42, PY + 84, 11, '#6c7388', 'center', null); txt(BOSSES[R.unlockBy].short, x + 42, PY + 100, 13, '#6c7388', 'center', null); }
+    drawRabbit(i, x + 35, PY + 46, -0.5, 0, un ? (full ? .55 : 1) : .3, .72, un ? { lift: sel ? Math.abs(Math.sin(T * 6)) * 5 : 0, sx: 1, sy: 1, ear: 0, blink: ((T + i) % 5) < .14 } : null);
+    if (un) {
+      txt(R.short, x + 35, PY + 80, 11, INK, 'center', null);
+      if (full) txt('FULLT ' + n + '/' + R.max, x + 35, PY + 99, 11, '#a0522d', 'center', null);
+      else {
+        coin(x + 11, PY + 99, 5.5); txt(String(R.cost), x + 19, PY + 99, 12, can ? '#8a5a00' : '#d32f2f', 'left', null);
+        txt(n + '/' + R.max, x + 66, PY + 99, 10, '#8a6a3a', 'right', null);
+      }
+    } else { txt('SLÅ', x + 35, PY + 80, 11, '#6c7388', 'center', null); txt(BOSSES[R.unlockBy].short, x + 35, PY + 97, 12, '#6c7388', 'center', null); }
+  });
+}
+// the hero's two ability buttons sit at the right end of the bottom bar at all times
+function drawAbilities() {
+  const h = g.hero;
+  if (!h) return;
+  const H = h.H;
+  [['q', PY + 8, 52], ['r', PY + 64, 50]].forEach(([slot, y, hh]) => {
+    const A = H[slot], left = slot === 'q' ? h.qT : h.rT, locked = slot === 'r' && h.lvl < ULT_LVL;
+    const ready = !locked && left <= 0 && g.state === 'wave';
+    btns.push({ x: 448, y, w: 88, h: hh, fn: () => cast(slot) });
+    card(448, y, 88, hh, locked ? '#8a8f9c' : H.color, 12);
+    if (!locked && left > 0) {
+      const k = left / heroCd(h, slot);
+      ctx.save(); rr(448, y, 88, hh, 12); ctx.clip();
+      ctx.fillStyle = 'rgba(20,5,40,.55)'; ctx.fillRect(448, y + hh * (1 - k), 88, hh * k); ctx.restore();
+    }
+    if (ready) { ctx.save(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5; ctx.globalAlpha = .5 + Math.sin(T * 6) * .4; rr(446, y - 2, 92, hh + 4, 14); ctx.stroke(); ctx.restore(); }
+    txt(slot.toUpperCase(), 461, y + 14, 13, '#ffe58a');
+    txt(A.short, 492, y + hh / 2 + 1, A.short.length > 8 ? 10 : 11, '#fff');
+    txt(locked ? 'NIVÅ ' + ULT_LVL : left > 0 ? Math.ceil(left) + 's' : ready ? 'REDO!' : '', 492, y + hh - 11, 10, '#fff', 'center', null);
+  });
+}
+function drawHeroPanel(h) {
+  const H = h.H;
+  drawHero(h.key, 32, PY + 58, -.5, .95, { blink: (T % 3.3) < .13, seed: h.seed });
+  txt(H.name, 62, PY + 18, 16, '#fff', 'left');
+  txt('NIVÅ ' + h.lvl + ' · ' + h.pops + ' pop', 62, PY + 38, 11, '#f3dcb5', 'left', null);
+  ctx.fillStyle = INK; rr(62, PY + 50, 120, 10, 5); ctx.fill();
+  const k = h.lvl >= HERO_MAX ? 1 : h.xp / xpNeed(h.lvl);
+  ctx.fillStyle = H.color; rr(64, PY + 52, 116 * k, 6, 3); ctx.fill();
+  txt(h.lvl >= HERO_MAX ? 'MAX' : 'XP', 186, PY + 55, 9, '#f3dcb5', 'left', null);
+  const can = g.state === 'prep';
+  btn(62, PY + 68, 128, 44, can ? 'FLYTTA\ngratis' : 'FLYTTA\nmellan vågor', '#ff9b21', () => { g.heroMove = true; g.sel = null; g.armed = -1; sfx(440, .05); }, { size: 11, disabled: !can });
+  ITEMS.forEach((it, i) => {
+    const x = 196 + (i % 2) * 125, y = PY + 8 + Math.floor(i / 2) * 54, own = h.items.includes(it.key);
+    btn(x, y, 121, 50, own ? it.name + '\n✓ ' + it.desc : it.name + '\n' + it.desc + '\n¢ ' + it.cost, own ? '#3fbf5a' : '#7d8cff', () => {
+      if (own) return;
+      if (g.gold < it.cost) { pop(h.x, h.y - 30, 'FÖR LITE ¢', '#ff8a8a'); sfx(150, .12, 'sawtooth'); return; }
+      g.gold -= it.cost; h.items.push(it.key); h.s = heroStats(h); h.hop = .5;
+      comicPop(h.x, h.y - 50, it.name + '!', H.color); sfx(800, .2, 'triangle', .05, 400); burst(h.x, h.y, '#ffd23b', 10);
+    }, { size: 10, dim: !own && g.gold < it.cost });
   });
 }
 function rabbitRow(list, y) {
@@ -1360,10 +2102,37 @@ function drawModal(m) {
     para('"' + fin.taunt + '"', 188, y + 42, 282, 13, '#5a3a1a');
     para('Kuriosa: ' + fin.fact, 180, y + 94, 300, 12, '#8a6a3a');
     btn(120, 778, 300, 66, 'TILL STRID!', '#3fbf5a', closeModal, { size: 24 });
+  } else if (m.kind === 'hero') {
+    card(20, 90, 500, 780, '#fff3d6', 22);
+    txt('VÄLJ HJÄLTE', W / 2, 130, 30, '#ff5fa2');
+    txt('Hjälten går upp i nivå, har förmågor och kan flyttas gratis mellan vågorna.', W / 2, 162, 12, '#8a6a3a', 'center', null);
+    HERO_KEYS.forEach((key, i) => {
+      const H = HEROES[key], un = heroUnlocked(key), y = 184 + i * 222;
+      btns.push({ x: 36, y, w: 468, h: 210, fn: un ? () => {
+        closeModal(); const h = setHero(key); g.sel = null; burst(h.x, h.y, H.color, 16);
+        say(h, pick(H.lines.pick), 2.6); sfx(700, .3, 'triangle', .06, 500);
+      } : null });
+      card(36, y, 468, 210, un ? '#ffffff' : '#d9dce4', 18);
+      ctx.save(); if (!un) ctx.globalAlpha = .35;
+      ctx.fillStyle = H.color + '33'; ctx.beginPath(); ctx.arc(112, y + 105, 70, 0, 7); ctx.fill();
+      drawHero(key, 112, y + 118, -.3 + Math.sin(T) * .3, 2.3, { lift: un ? Math.abs(Math.sin(T * 2 + i)) * 6 : 0, blink: ((T + i) % 3.7) < .13, seed: i });
+      ctx.restore();
+      txt(H.name, 200, y + 30, 26, un ? H.color : '#8a8f9c', 'left');
+      txt(H.title.toUpperCase(), 200, y + 58, 13, un ? '#8a6a3a' : '#8a8f9c', 'left', null);
+      if (un) {
+        let yy = para(H.desc, 200, y + 82, 290, 13, INK);
+        txt('Q · ' + H.q.name, 200, yy + 10, 12, '#5a3a8a', 'left', null);
+        txt('R · ' + H.r.name + ' (nivå ' + ULT_LVL + ')', 200, yy + 30, 12, '#5a3a8a', 'left', null);
+        btn(360, y + 160, 132, 40, 'VÄLJ', '#3fbf5a', btns[btns.length - 1].fn, { size: 18 });
+      } else {
+        txt('🔒 LÅST', 200, y + 100, 18, '#6c7388', 'left', null);
+        txt('Klara ' + LEVELS[H.unlock].name + ' för att låsa upp', 200, y + 128, 12, '#6c7388', 'left', null);
+      }
+    });
   } else if (m.kind === 'tip') {
     const tip = TIPS[m.key], p = parseSpec(tip.spec);
     card(40, 150, 460, 640, '#fff3d6', 22);
-    txt('NY BALLONG!', W / 2, 192, 30, '#ff5a5a');
+    txt('NY MINION!', W / 2, 192, 30, '#ff5a5a');
     drawBalloon(W / 2, 285 + Math.sin(T * 2) * 5, 34, KINDS[p.k].color, Object.assign({ kind: p.k }, p), false, 1.8);
     txt(tip.title, W / 2, 358, 22, INK, 'center', null);
     let y = para(tip.text, W / 2, 392, 400, 16, INK, 'center');
@@ -1391,6 +2160,7 @@ function drawModal(m) {
     txt(R.name, W / 2, 450, 24, INK, 'center', null);
     let y = para(R.desc, W / 2, 486, 360, 15, '#5a3a1a', 'center');
     para(m.boss.short + ' tappade den när ballongen sprack. Nu är den din!', W / 2, y + 12, 360, 13, '#8a6a3a', 'center');
+    txt('Max ' + R.max + ' st per bana', W / 2, y + 60, 13, '#2f7d32', 'center', null);
     btn(130, 630, 280, 64, 'VÄLKOMMEN!', '#3fbf5a', closeModal, { size: 22 });
   }
 }
@@ -1404,10 +2174,12 @@ function drawPause() {
   drawOverlayBase('PAUSAD', '#4d8dff');
   txt('Kaninerna tar en morotspaus. Spelet sparas efter varje våg.', W / 2, 240, 13, '#8a6a3a', 'center', null);
   const nb = nextBoss();
-  btn(110, 290, 320, 70, 'FORTSÄTT', '#3fbf5a', () => { g.paused = false; }, { size: 22 });
-  btn(110, 380, 320, 70, 'NÄSTA BOSS', '#c0713a', () => { g.paused = false; if (nb) g.modals.push({ kind: 'boss', key: nb.key }); }, { size: 22, disabled: !nb });
-  btn(110, 470, 320, 70, 'STARTA OM', '#ff9b21', () => startLevel(g.lv), { size: 22 });
-  btn(110, 560, 320, 70, 'MENY', '#4d8dff', () => { scene = 'menu'; }, { size: 22 });
+  btn(110, 270, 320, 66, 'FORTSÄTT', '#3fbf5a', () => { g.paused = false; }, { size: 22 });
+  btn(110, 350, 320, 66, 'NÄSTA BOSS', '#c0713a', () => { g.paused = false; if (nb) g.modals.push({ kind: 'boss', key: nb.key }); }, { size: 22, disabled: !nb });
+  btn(110, 430, 320, 66, 'AUTOSTART: ' + (save.auto ? 'PÅ' : 'AV'), save.auto ? '#7d8cff' : '#8a8f9c', () => { save.auto = !save.auto; persist(); }, { size: 20 });
+  txt(save.auto ? 'Vågorna startar själva efter nedräkningen.' : 'Du startar varje våg själv med VÅG-knappen.', W / 2, 512, 12, '#8a6a3a', 'center', null);
+  btn(110, 530, 320, 66, 'STARTA OM', '#ff9b21', () => startLevel(g.lv), { size: 22 });
+  btn(110, 610, 320, 66, 'MENY', '#4d8dff', () => { scene = 'menu'; }, { size: 22 });
 }
 function drawEnd() {
   const win = endInfo.win, fin = BOSSES[g.def.bosses[g.total]];
@@ -1432,9 +2204,16 @@ function drawEnd() {
     y = para(endInfo.tip, W / 2, y + 198, 360, 16, INK, 'center') + 10;
   }
   y = Math.max(y + 10, 540);
-  if (win && g.lv + 1 < LEVELS.length) { btn(110, y, 320, 60, 'NÄSTA BANA', '#3fbf5a', () => startLevel(g.lv + 1), { size: 21 }); y += 72; }
+  const toMenu = () => { scene = 'menu'; g = null; };
+  if (!win) {
+    // a lost game is over: the run is gone and the player goes back to the map
+    txt('Kaninerna har packat ihop. Börja om från våg 1!', W / 2, y, 13, '#8a6a3a', 'center', null);
+    btn(110, y + 30, 320, 70, 'TILL MENYN', '#4d8dff', toMenu, { size: 23 });
+    return;
+  }
+  if (g.lv + 1 < LEVELS.length) { btn(110, y, 320, 60, 'NÄSTA BANA', '#3fbf5a', () => startLevel(g.lv + 1), { size: 21 }); y += 72; }
   btn(110, y, 320, 60, 'SPELA IGEN', '#ff9b21', () => startLevel(g.lv), { size: 21 }); y += 72;
-  btn(110, y, 320, 60, 'MENY', '#4d8dff', () => { scene = 'menu'; }, { size: 21 });
+  btn(110, y, 320, 60, 'MENY', '#4d8dff', toMenu, { size: 21 });
 }
 
 // ---------- input ----------
@@ -1446,6 +2225,16 @@ function gridCell(x, y) {
 function tapGrid(x, y) {
   const cell = gridCell(x, y); if (!cell) return;
   const { c, r } = cell; g.hover = cell;
+  if (g.heroMove) {
+    const h = g.hero;
+    if (h.c === c && h.r === r) { g.heroMove = false; return; }
+    if (!canBuild(c, r)) { sfx(150, .1, 'sawtooth'); return; }
+    burst(h.x, h.y + 10, h.H.color, 6, 80);
+    Object.assign(h, { c, r, x: c * CS + CS / 2, y: GY + r * CS + CS / 2, hop: .5 });
+    g.heroMove = false;
+    burst(h.x, h.y + 10, h.H.color, 10, 100); say(h, pick(h.H.lines.move)); sfx(600, .15, 'triangle', .05, 400);
+    return;
+  }
   if (g.moving) {
     const t = g.moving, mc = moveCost(t);
     if (t.c === c && t.r === r) { g.moving = null; return; }
@@ -1457,11 +2246,17 @@ function tapGrid(x, y) {
     burst(t.x, t.y + 10, '#c9a26b', 8, 90); say(t, pick(LINES.move)); sfx(500, .15, 'triangle', .05, 300);
     return;
   }
+  if (g.hero && g.hero.c === c && g.hero.r === r) { g.sel = g.hero; g.armed = -1; g.hero.hop = .4; sfx(620, .05); return; }
   const t = g.towers.find(t => t.c === c && t.r === r);
   if (t) { g.sel = t; g.armed = -1; t.hop = .4; sfx(520, .05); return; }
   if (g.armed < 0) { g.sel = null; return; }
   const R = RABBITS[g.armed];
   if (!canBuild(c, r)) { sfx(150, .1, 'sawtooth'); return; }
+  if (countOf(g.armed) >= R.max) {
+    pop(x, y, 'MAX ' + R.max + ' ' + R.short + '!', '#ff8a8a'); sfx(150, .12, 'sawtooth');
+    const same = g.towers.find(o => o.type === g.armed); if (same) say(same, pick(LINES.full));
+    return;
+  }
   if (g.gold < R.cost) { pop(x, y, 'FÖR LITE ¢', '#ff8a8a'); sfx(150, .12, 'sawtooth'); return; }
   g.gold -= R.cost;
   const nt = { type: g.armed, c, r, x: c * CS + CS / 2, y: GY + r * CS + CS / 2, lvl: 1, cd: 0, ang: -0.5, invested: R.cost, mode: 'first', sees: false,
@@ -1487,11 +2282,17 @@ cv.addEventListener('contextmenu', e => e.preventDefault());
 addEventListener('keydown', e => {
   if (scene !== 'play' || g.result) return;
   const k = e.key;
-  if (g.modals.length) { if (k === 'Enter' || k === ' ' || k === 'Escape') { e.preventDefault(); closeModal(); } return; }
-  if (k === 'Escape' && g.moving) { g.moving = null; return; }
+  if (g.modals.length) {
+    // the hero has to be picked by tapping a card
+    if (g.modals[0].kind !== 'hero' && (k === 'Enter' || k === ' ' || k === 'Escape')) { e.preventDefault(); closeModal(); }
+    return;
+  }
+  if (k === 'Escape' && (g.moving || g.heroMove)) { g.moving = null; g.heroMove = false; return; }
   if (k === 'p' || k === 'P' || k === 'Escape') g.paused = !g.paused;
   else if (k === ' ' || k === 'Enter') { e.preventDefault(); nextWaveNow(); }
   else if (k === 'f' || k === 'F') g.speed = g.speed % 3 + 1;
+  else if (k === 'q' || k === 'Q') cast('q');
+  else if (k === 'r' || k === 'R') cast('r');
   else if (k >= '1' && k <= '6' && rabbitUnlocked(+k - 1)) { g.armed = +k - 1; g.sel = null; g.moving = null; }
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden && scene === 'play' && g && !g.result) g.paused = true; });
