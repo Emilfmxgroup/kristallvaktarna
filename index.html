@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<meta name="theme-color" content="#6ecbff">
+<meta name="theme-color" content="#140b22">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<title>Kaninväktarna</title>
+<title>Kristallväktarna</title>
 <style>
-  html,body{margin:0;height:100%;background:#2b6a2f;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  html,body{margin:0;height:100%;background:#0e0818;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 </style>
 </head>
@@ -20,8 +20,10 @@
 'use strict';
 // ---------- constants ----------
 const W = 540, H = 960, CS = 60, COLS = 9, ROWS = 13, GY = 60, PY = GY + ROWS * CS;
-const INK = '#3b2410';
+const INK = '#140b22';
 const FONT = 'bold {s}px "Trebuchet MS","Arial Rounded MT Bold",Verdana,sans-serif';
+// big titles use a carved serif, like the lettering on an old city gate
+const TFONT = 'bold {s}px Georgia,"Times New Roman",serif';
 const cv = document.getElementById('c');
 // ctx is swapped to an offscreen canvas while a level's ground is painted
 let ctx = cv.getContext('2d');
@@ -37,22 +39,22 @@ const pick = a => a[(Math.random() * a.length) | 0];
 
 // ---------- save ----------
 const SAVE_KEY = 'kaninvaktarna-v1';
-let save = { stars: [0, 0, 0, 0, 0], muted: false, seen: {}, story: false, rabbits: null, run: null, auto: true };
+let save = { stars: [0, 0, 0, 0, 0], muted: false, seen: {}, story: false, TOWERS: null, run: null, auto: true };
 try {
   const s = JSON.parse(localStorage.getItem(SAVE_KEY));
   if (s && Array.isArray(s.stars)) save = Object.assign(save, s);
 } catch (e) {}
 // a lost game must never come back as a run to continue
 if (save.run && !(save.run.lives > 0)) save.run = null;
-if (!Array.isArray(save.rabbits)) {
-  // older saves unlocked rabbits by clearing levels
-  save.rabbits = [0, 1];
-  [[0, 2], [1, 3], [2, 4], [3, 5]].forEach(([lv, i]) => { if (save.stars[lv] > 0) save.rabbits.push(i); });
+if (!Array.isArray(save.TOWERS)) {
+  // older saves unlocked TOWERS by clearing levels
+  save.TOWERS = [0, 1];
+  [[0, 2], [1, 3], [2, 4], [3, 5]].forEach(([lv, i]) => { if (save.stars[lv] > 0) save.TOWERS.push(i); });
 }
 function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) {} }
 const cleared = i => save.stars[i] > 0;
 const levelUnlocked = i => i === 0 || cleared(i - 1);
-const rabbitUnlocked = i => save.rabbits.includes(i);
+const towerUnlocked = i => save.TOWERS.includes(i);
 const totalStars = () => save.stars.reduce((a, b) => a + b, 0);
 
 // ---------- audio ----------
@@ -83,58 +85,59 @@ const BAL = {
   boss: 200, bossLeak: 12, startGold: [130, 300, 380, 460, 540], moveCost: .3, rangeCost: .5,
   lives: 40, waveBonus: 10, waveBonusN: 1,
 };
-const DNAME = { sharp: 'VASS', boom: 'SPRÄNG', ice: 'IS', sun: 'SOL', heart: 'HJÄRTA', smash: 'KROSS', true: 'STJÄRNA' };
+const DNAME = { sharp: 'VASS', boom: 'SPRÄNG', ice: 'FROST', sun: 'LJUS', heart: 'HJÄRTA', smash: 'KROSS', true: 'STJÄRNA' };
 const MODES = ['first', 'strong', 'close'];
 const MODE_NAME = { first: 'FÖRST', strong: 'STARKAST', close: 'NÄRMAST' };
 const RANGE_UP = 2.5 * CS;
-// unlockBy = the forest boss that hands the rabbit over (start rabbits have none); max = how many may stand on a level
-const RABBITS = [
-  { name: 'PILKANIN', short: 'PIL', cost: 60, max: 5, fur: '#e8c49a', dtype: 'sharp',
-    desc: 'Kastar vassa pilar. Biter på gummi!',
+// towers: a machine plus the little engineer who runs it; unlockBy = the boss that hands the blueprint over,
+// max = how many may stand on a level, color = the glow of its crystal, op = the engineer's look
+const TOWERS = [
+  { name: 'ARMBORSTTORN', short: 'ARMBORST', cost: 60, max: 5, color: '#ffb35c', op: 'op0', dtype: 'sharp',
+    desc: 'Skjuter vassa bultar. Biter på gummi!',
     base: { range: 110, cd: .6, dmg: 9, pierce: 1, count: 1, proj: 470 },
     ups: [
-      { name: 'Vassare pilar', desc: '+60% skada, går igenom 2', cost: 55, f: s => { s.dmg *= 1.6; s.pierce += 1; } },
-      { name: 'Trippelpil', desc: 'Kastar 3 pilar samtidigt', cost: 120, f: s => { s.count = 3; } },
-      { name: 'Örnöga', desc: 'Ser osynliga, +25% räckvidd', cost: 170, f: s => { s.camo = true; s.range *= 1.25; } },
+      { name: 'Vassare bultar', desc: '+60% skada, går igenom 2', cost: 55, f: s => { s.dmg *= 1.6; s.pierce += 1; } },
+      { name: 'Trippelskott', desc: 'Skjuter 3 bultar samtidigt', cost: 120, f: s => { s.count = 3; } },
+      { name: 'Kikarsikte', desc: 'Ser osynliga, +25% räckvidd', cost: 170, f: s => { s.camo = true; s.range *= 1.25; } },
     ] },
-  { name: 'ISKANIN', short: 'IS', cost: 80, max: 3, fur: '#ffffff', dtype: 'ice',
-    desc: 'Snöbollar som saktar ner alla minions.',
+  { name: 'FROSTKANON', short: 'FROST', cost: 80, max: 3, color: '#5ee7ff', op: 'op1', dtype: 'ice',
+    desc: 'Frostkulor som saktar ner alla minions.',
     base: { range: 100, cd: .9, dmg: 3, pierce: 1, count: 1, proj: 380, slow: .4 },
     ups: [
-      { name: 'Kallare snö', desc: 'Saktar ner ännu mer', cost: 60, f: s => { s.slow = .6; s.dmg *= 1.5; } },
-      { name: 'Snöstorm', desc: 'Träffar ett helt område', cost: 130, f: s => { s.splash = 50; } },
+      { name: 'Kallare frost', desc: 'Saktar ner ännu mer', cost: 60, f: s => { s.slow = .6; s.dmg *= 1.5; } },
+      { name: 'Frostmoln', desc: 'Träffar ett helt område', cost: 130, f: s => { s.splash = 50; } },
       { name: 'Djupfrysning', desc: 'Fryser fast minions', cost: 190, f: s => { s.stun = .7; s.cd *= .8; } },
     ] },
-  { name: 'BOMBKANIN', short: 'BOMB', cost: 120, max: 4, fur: '#b4b4c4', dtype: 'boom', unlockBy: 'krax',
-    desc: 'Morotsbomber som smäller. Enda som biter på plåt!',
+  { name: 'MORTEL', short: 'MORTEL', cost: 120, max: 4, color: '#ff7a3d', op: 'op2', dtype: 'boom', unlockBy: 'krax',
+    desc: 'Skjuter bomber som smäller. Enda tornet som biter på plåt!',
     base: { range: 115, cd: 1.4, dmg: 20, pierce: 1, count: 1, proj: 320, splash: 50 },
     ups: [
       { name: 'Större smäll', desc: 'Större explosion', cost: 90, f: s => { s.splash = 72; } },
-      { name: 'Snabbladdning', desc: 'Kastar mycket oftare', cost: 150, f: s => { s.cd *= .62; } },
-      { name: 'Megamorot', desc: 'Dubbel skada', cost: 230, f: s => { s.dmg *= 2; } },
+      { name: 'Snabbladdning', desc: 'Skjuter mycket oftare', cost: 150, f: s => { s.cd *= .62; } },
+      { name: 'Megabomb', desc: 'Dubbel skada', cost: 230, f: s => { s.dmg *= 2; } },
     ] },
-  { name: 'SPEJARKANIN', short: 'SPEJARE', cost: 90, max: 3, fur: '#d9a066', dtype: 'sharp', unlockBy: 'gunnar',
-    desc: 'Ser osynliga minions. Kaniner nära henne ser dem också!',
+  { name: 'SPANINGSTORN', short: 'SPANING', cost: 90, max: 3, color: '#7dff9a', op: 'op3', dtype: 'sharp', unlockBy: 'gunnar',
+    desc: 'Ser osynliga minions. Torn nära det ser dem också!',
     base: { range: 125, cd: 1.05, dmg: 8, pierce: 3, count: 1, proj: 420, camo: true, aura: true },
     ups: [
       { name: 'Längre kikare', desc: '+25% räckvidd och syn', cost: 70, f: s => { s.range *= 1.25; } },
-      { name: 'Dubbelbumerang', desc: '2 bumeranger, +40% skada', cost: 140, f: s => { s.count = 2; s.dmg *= 1.4; } },
+      { name: 'Dubbelkugg', desc: '2 kugghjul, +40% skada', cost: 140, f: s => { s.count = 2; s.dmg *= 1.4; } },
       { name: 'Avslöja', desc: 'Tar bort osynligheten', cost: 200, f: s => { s.strip = true; } },
     ] },
-  { name: 'ODLARKANIN', short: 'ODLARE', cost: 110, max: 2, fur: '#b07a4a', dtype: null, unlockBy: 'majken',
-    desc: 'Odlar morotsmynt efter varje våg.',
+  { name: 'MYNTVERK', short: 'MYNT', cost: 110, max: 2, color: '#ffd23b', op: 'op4', dtype: null, unlockBy: 'majken',
+    desc: 'Präglar mynt efter varje våg.',
     base: { range: 0, income: 30 },
     ups: [
-      { name: 'Större land', desc: 'Ger 50 per våg', cost: 90, f: s => { s.income = 50; } },
-      { name: 'Vattenkanna', desc: 'Ger 75 per våg', cost: 140, f: s => { s.income = 75; } },
-      { name: 'Guldmorötter', desc: 'Ger 110 per våg', cost: 210, f: s => { s.income = 110; } },
+      { name: 'Större press', desc: 'Ger 50 per våg', cost: 90, f: s => { s.income = 50; } },
+      { name: 'Ångdrift', desc: 'Ger 75 per våg', cost: 140, f: s => { s.income = 75; } },
+      { name: 'Guldpress', desc: 'Ger 110 per våg', cost: 210, f: s => { s.income = 110; } },
     ] },
-  { name: 'SOLKANIN', short: 'SOL', cost: 170, max: 3, fur: '#ffe2a8', dtype: 'sun', unlockBy: 'ugo',
-    desc: 'Bränner minions med solljus och en spegel.',
+  { name: 'KRISTALLSTRÅLE', short: 'STRÅLE', cost: 170, max: 3, color: '#c77dff', op: 'op5', dtype: 'sun', unlockBy: 'ugo',
+    desc: 'Bränner minions med en stråle från en kristall.',
     base: { range: 130, cd: .1, dmg: 3, beam: true, chain: 1 },
     ups: [
-      { name: 'Större spegel', desc: '+60% skada', cost: 130, f: s => { s.dmg *= 1.6; } },
-      { name: 'Brännglas', desc: '+25% räckvidd', cost: 150, f: s => { s.range *= 1.25; } },
+      { name: 'Större kristall', desc: '+60% skada', cost: 130, f: s => { s.dmg *= 1.6; } },
+      { name: 'Fokuslins', desc: '+25% räckvidd', cost: 150, f: s => { s.range *= 1.25; } },
       { name: 'Dubbelstråle', desc: 'Träffar 2 minions', cost: 270, f: s => { s.chain = 2; } },
     ] },
 ];
@@ -147,17 +150,17 @@ const KINDS = {
 };
 const TIPS = {
   y:    { title: 'SPRINTMINION', spec: 'y', good: [0, 1], joke: 'Den har druckit alldeles för mycket saft.',
-          text: 'Supersnabb! Ställ kaniner tidigt längs stigen, eller sakta ner den med snö.' },
+          text: 'Supersnabb! Bygg torn tidigt längs gatan, eller sakta ner den med frost.' },
   b:    { title: 'TANKMINION', spec: 'b', good: [0, 2], joke: 'Hjälmen är för stor. Den ser ingenting.',
-          text: 'Tjock och svår att få hål på. Uppgradera dina kaniner!' },
+          text: 'Tjock och svår att få hål på. Uppgradera dina torn!' },
   k:    { title: 'KLANMINION', spec: 'k', good: [2, 1], joke: 'Den bär sina barn på huvudet. Hela tiden.',
-          text: 'När den spricker springer 3 små svärdminions ut. Ha fler kaniner längre fram på stigen!' },
+          text: 'När den spricker springer 3 små svärdminions ut. Ha fler torn längre fram på gatan!' },
   seg:  { title: 'GUMMIMINION', spec: 'r+seg', good: [0, 3], joke: 'Gjord av gamla gummistövlar. Luktar också så.',
-          text: 'Allt studsar av utom VASSA saker och hjärtan. Snöbollar och bomber biter inte!' },
+          text: 'Allt studsar av utom VASSA saker och hjärtan. Frost och bomber biter inte!' },
   plat: { title: 'PLÅTMINION', spec: 'b+plat', good: [2], joke: 'Mården Majken putsar den varje morgon.',
           text: 'Gjord av plåt! Bara EXPLOSIONER och krossar kan spräcka den. Plåt har inget hjärta.' },
   camo: { title: 'OSYNLIG MINION', spec: 'r+camo', good: [3, 0], joke: 'Den har solglasögon. Det hjälper tydligen.',
-          text: 'Syns bara för kaniner med kikare. Kaniner nära en Spejarkanin ser den också. Pilkanin ser den efter Örnöga.' },
+          text: 'Syns bara för torn med kikare. Torn nära ett Spaningstorn ser den också. Armborsttornet ser den efter Kikarsikte.' },
 };
 // heroes: one per level, chosen before the first wave; they level up from pops nearby and have two abilities
 const HEROES = {
@@ -205,7 +208,7 @@ const HERO_KEYS = ['linnea', 'torsten', 'maja'];
 const heroUnlocked = k => HEROES[k].unlock == null || save.stars[HEROES[k].unlock] > 0;
 // items: bought for the hero with coins, kept until the level ends
 const ITEMS = [
-  { key: 'staff', name: 'MOROTSSTAV', desc: '+40% skada', cost: 220, f: s => { s.dmg *= 1.4; } },
+  { key: 'staff', name: 'MÅNSTAV', desc: '+40% skada', cost: 220, f: s => { s.dmg *= 1.4; } },
   { key: 'shoes', name: 'SNABBSKOR', desc: '+35% fart', cost: 240, f: s => { s.cd /= 1.35; } },
   { key: 'goggles', name: 'UGGLEGLASÖGON', desc: 'Ser osynliga', cost: 160, f: s => { s.camo = true; } },
   { key: 'glass', name: 'TIMGLAS', desc: 'Snabbare förmågor', cost: 260, f: s => { s.cdr = .7; } },
@@ -213,186 +216,187 @@ const ITEMS = [
 const HERO_MAX = 10, ULT_LVL = 6;
 const xpNeed = l => 14 + l * 10;
 const MULTI = ['', '', 'DUBBELPOP!', 'TRIPPELPOP!', 'KVADRAPOP!', 'PENTAPOP!'];
-// hpk scales boss hp; finals of a place are tougher than the henchmen on the way
+// the villains are the Mask Gang from the Deep, each wearing an animal mask; hpk scales boss hp
 const BOSSES = {
   krax: { name: 'KRÅKAN KRAX', short: 'KRAX', animal: 'crow', color: '#3a3f55', sp: 34, hpk: .8, props: {}, ability: 'dash', weak: 'sharp', gold: 120,
-    taunt: 'Krax! Glänsande morötter! Mina!', half: 'Krax?! Mina fjädrar!', defeat: 'Krax... jag hämtar Gunnar!',
-    win: 'Krax krax! Allt glänsande är mitt!', fact: 'Krax tror att morötter är guld. Ingen har vågat säga emot.' },
+    taunt: 'Krax! Glänsande kristaller! Mina!', half: 'Krax?! Min fina mask!', defeat: 'Krax... jag hämtar Gunnar!',
+    win: 'Krax krax! Allt glänsande är mitt!', fact: 'Krax tror att kristaller är godis. Ingen har vågat säga emot.' },
   gunnar: { name: 'GRÄVLINGEN GUNNAR', short: 'GUNNAR', animal: 'badger', color: '#7d6b5a', sp: 22, hpk: 1, props: { seg: true }, ability: 'spawn', weak: 'sharp', gold: 180,
-    taunt: 'Jag gräver mig fram till ert förråd!', half: 'Aj! Min gummiballong!', defeat: 'Jag går och lägger mig. I ett hål.',
-    win: 'Gräv gräv, mumsa mumsa!', fact: 'Gunnar har sovit sig igenom tre vintrar och en födelsedag.' },
+    taunt: 'Jag gräver en tunnel rakt in i ert förråd!', half: 'Aj! Min gummiballong!', defeat: 'Jag går och lägger mig. I en tunnel.',
+    win: 'Gräv gräv, glitter glitter!', fact: 'Gunnar har sovit sig igenom tre vintrar och en födelsedag.' },
   majken: { name: 'MÅRDEN MAJKEN', short: 'MAJKEN', animal: 'marten', color: '#9b6a3c', sp: 28, hpk: 1, props: { plat: true }, ability: 'spawn', weak: 'boom', gold: 240,
     taunt: 'Plåt och fart, det är min stil!', half: 'Min plåt! Den var nypolerad!', defeat: 'Det här säger jag till Rufus!',
     win: 'Snabb som en mård, hihi!', fact: 'Majken putsar sin plåtballong varje morgon. Två gånger.' },
   ugo: { name: 'UGGLAN UGO', short: 'UGO', animal: 'owl', color: '#6a4e8a', sp: 24, hpk: 1, props: { camo: true }, ability: null, weak: 'boom', gold: 300,
-    taunt: 'Hoo-hoo! Ni ser mig inte i mörkret!', half: 'Hoo?! Vem tände lampan?', defeat: 'Hoo... dags för min tupplur.',
-    win: 'Hoo-hoo! Kloka ugglor tar morötter!', fact: 'Ugo är vaken hela natten och somnar alltid mitt i sina egna planer.' },
+    taunt: 'Hoo-hoo! Ni ser mig inte i mörkret!', half: 'Hoo?! Vem tände lyktan?', defeat: 'Hoo... dags för min tupplur.',
+    win: 'Hoo-hoo! Kloka ugglor tar kristaller!', fact: 'Ugo är vaken hela natten och somnar alltid mitt i sina egna planer.' },
   rufus: { name: 'RÄVEN RUFUS', short: 'RUFUS', animal: 'fox', color: '#ff8a3d', sp: 24, hpk: 1.8, props: {}, ability: 'spawnk', weak: 'sharp', gold: 400,
-    taunt: 'Hehe! Mina ballonger tar varenda morot!', half: 'Aj aj! Mina fina ballonger!', defeat: 'Jag kommer tillbaka... med FLER ballonger!',
-    win: 'Tack för morötterna, hihi!', fact: 'Rufus är egentligen rädd för kaniner. Säg inget!' },
+    taunt: 'Hehe! Mina minions tar varenda kristall!', half: 'Aj aj! Mina fina ballonger!', defeat: 'Jag kommer tillbaka... med FLER ballonger!',
+    win: 'Tack för kristallerna, hihi!', fact: 'Rufus är egentligen rädd för mörkret. Säg inget!' },
   vera: { name: 'VESSLAN VERA', short: 'VERA', animal: 'weasel', color: '#9aa3b5', sp: 24, hpk: 1.8, props: { plat: true }, ability: 'spawn', weak: 'boom', gold: 400,
     taunt: 'Min plåtballong biter ni aldrig på!', half: 'Hallå! Plåten bucklar ju!', defeat: 'Det här var inte rostfritt alls...',
-    win: 'Plåt slår kanin. Alltid!', fact: 'Vera samlar på konservburkar. Hon har 4 000 stycken.' },
+    win: 'Plåt slår allt. Alltid!', fact: 'Vera samlar på konservburkar. Hon har 4 000 stycken.' },
   lova: { name: 'LODJURET LOVA', short: 'LOVA', animal: 'lynx', color: '#c9a26b', sp: 24, hpk: 1.8, props: { camo: true, seg: true }, ability: null, weak: 'sharp', gold: 400,
     taunt: 'Ni ser mig inte ens komma...', half: 'Hur kunde ni SE mig?!', defeat: 'Jag smyger hem nu. Tyst. Väldigt tyst.',
-    win: 'Psst... jag tog alla morötter.', fact: 'Lova gömmer sig så bra att hon ibland tappar bort sig själv.' },
+    win: 'Psst... jag tog alla kristaller.', fact: 'Lova gömmer sig så bra att hon ibland tappar bort sig själv.' },
   ottar: { name: 'ÖRNEN OTTAR', short: 'OTTAR', animal: 'eagle', color: '#8d5a2b', sp: 30, hpk: 1.8, props: {}, ability: 'dash', weak: 'boom', gold: 400,
-    taunt: 'Jag är snabbast i hela skogen!', half: 'Vänta, jag är inte uppvärmd!', defeat: 'Jag flög rakt in i en morot!',
+    taunt: 'Jag är snabbast i hela staden!', half: 'Vänta, jag är inte uppvärmd!', defeat: 'Jag flög rakt in i en skorsten!',
     win: 'För snabb för er, vingslag!', fact: 'Ottar har aldrig landat snyggt. Inte en enda gång.' },
   ulv: { name: 'VARGKUNGEN ULV', short: 'ULV', animal: 'wolf', color: '#5a6272', sp: 22, hpk: 2.4, props: { camo: true }, ability: 'spawnk', weak: 'sun', gold: 600,
-    taunt: 'Guldmoroten blir min. Då är skogen MIN!', half: 'Grrr! Det här stod inte i planen!', defeat: 'Okej, okej! Ni får behålla moroten!',
-    win: 'Guldmoroten är min! Muahaha!', fact: 'Ulv sover med en nattlampa formad som en morot.' },
+    taunt: 'Månkristallen blir min. Då är staden MIN!', half: 'Grrr! Det här stod inte i planen!', defeat: 'Okej, okej! Ni får behålla kristallen!',
+    win: 'Månkristallen är min! Muahaha!', fact: 'Ulv sover med en nattlampa. Den är formad som en måne.' },
 };
-const NAMES = ['Hoppe', 'Stampe', 'Morris', 'Lillöra', 'Nosse', 'Fluffe', 'Bettan', 'Tuss', 'Kotte', 'Snabbis',
-  'Viggo', 'Pompom', 'Majsan', 'Dunder', 'Skutt', 'Doris', 'Kalle Kål', 'Purre', 'Sixten', 'Tant Tass'];
+const NAMES = ['Ebba', 'Otto', 'Vilma', 'Sixten', 'Greta', 'Knut', 'Saga', 'Melker', 'Iris', 'Bruno',
+  'Tyra', 'Alvar', 'Signe', 'Ville', 'Elsa', 'Hugo', 'Stina', 'Gösta', 'Nora', 'Edvin'];
 const LINES = {
   place: [
-    ['Pilar laddade!', 'Jag siktar på allt rött.', 'Vem tog min morot?!'],
-    ['Snöbollskrig!', 'Brrr, nu blir det kallt.', 'Kyla är min superkraft.'],
-    ['BOM tycker jag om.', 'Hörselkåporna på!', 'Det kommer smälla. Mycket.'],
+    ['Bultarna är laddade!', 'Jag siktar på allt rött.', 'Armborst redo!'],
+    ['Frosten är på!', 'Brrr, nu blir det kallt.', 'Kyla är min superkraft.'],
+    ['BOM tycker jag om.', 'Hörselskydden på!', 'Det kommer smälla. Mycket.'],
     ['Jag ser dig, minion...', 'Kikaren är putsad.', 'Inget gömmer sig för mig!'],
-    ['Morötter växer inte på träd.', 'Jag odlar, ni poppar.', 'Vattna, vänta, vinst!'],
-    ['Solkräm? Aldrig hört talas om.', 'Spegel, spegel på väggen...', 'Nu blir det varmt!'],
+    ['Mynt växer inte på träd.', 'Jag präglar, ni poppar.', 'Klirr klirr, vinst!'],
+    ['Kristallen glöder!', 'Titta inte rakt in i den.', 'Nu blir det ljust!'],
   ],
-  upgrade: ['Ooh, nya grejer!', 'Starkare, snabbare, gulligare!', 'Jag känner mig farlig.', 'Mer pop för pengarna!', 'Kolla mina nya muskler!'],
-  range: ['Jag ser ända till grannens!', 'Längre armar! Typ.', 'Nu når jag ALLT.'],
-  move: ['Wiii!', 'Här var det fint!', 'Bättre utsikt härifrån!', 'Flyttlådorna är packade!', 'Hoppsan, nytt hem!'],
-  leak: ['Min morot!!', 'Neeej, inte den!', 'Stoppa tjuven!', 'Den hade min lunch!', 'Kom tillbaka med den!'],
-  clear: ['Hipp hipp hurra!', 'Lätt som en morot!', 'Vem är bäst? Vi!', 'Pop pop hurra!', 'Var det allt?'],
-  idle: ['Är det lunch snart?', 'Har nån sett min andra socka?', 'Mina öron kliar.', 'Jag är inte rädd. Öronen darrar bara.',
-    'Är det en fågel? Nej, en MINION!', 'Tänk om minionerna är snälla...? Nä.', 'Linnéa, kan du lära mig skjuta hjärtan?', 'Jag borde ha tagit med en morot.'],
+  upgrade: ['Ooh, nya kugghjul!', 'Starkare, snabbare, glänsigare!', 'Jag känner mig farlig.', 'Mer pop för pengarna!', 'Kolla min nya skiftnyckel!'],
+  range: ['Jag ser ända till grannkvarteret!', 'Längre kikare! Typ.', 'Nu når jag ALLT.'],
+  move: ['Wiii!', 'Här var det fint!', 'Bättre utsikt härifrån!', 'Flyttlådorna är packade!', 'Nytt torg, ny tur!'],
+  leak: ['Kristallen!!', 'Neeej, inte den!', 'Stoppa tjuven!', 'Den tog min lunch också!', 'Kom tillbaka med den!'],
+  clear: ['Hipp hipp hurra!', 'Lätt som en lykta!', 'Vem är bäst? Vi!', 'Pop pop hurra!', 'Var det allt?'],
+  idle: ['Är det lunch snart?', 'Har nån sett min andra skiftnyckel?', 'Min kugghjulsklocka går fel igen.', 'Jag är inte rädd. Knäna darrar bara.',
+    'Är det en fågel? Nej, en MINION!', 'Tänk om minionerna är snälla...? Nä.', 'Linnéa, kan du lära mig skjuta hjärtan?', 'Jag borde ha tagit med en macka.'],
   imm: ['Den studsar ju!', 'Vad är den gjord av?!', 'Orättvist!', 'Hjälp, den biter inte!'],
-  full: ['Vi är redan för många här!', 'Det finns inte fler mössor.', 'Nej tack, vi är fullbokade.'],
+  full: ['Vi är redan för många här!', 'Det finns inga fler skiftnycklar.', 'Nej tack, vi är fullbokade.'],
 };
-// each place has a guardian rabbit who chats with the hero and the villains between waves
+// each district has a guardian who chats with the hero and the villains between waves
 const GUARDS = [
-  { name: 'FARFAR FLUFF', type: 4 }, { name: 'BADVAKTEN BOSSE', type: 1 }, { name: 'DOKTOR KANTARELL', type: 3 },
-  { name: 'BERGIS', type: 0 }, { name: 'DROTTNING HOPPLA', type: 5 },
+  { name: 'GAMLE GUSTAV', look: 'gustav' }, { name: 'KAPTEN KAJSA', look: 'kajsa' }, { name: 'MÄSTER MUTTER', look: 'mutter' },
+  { name: 'TAKLÖPAR-TIM', look: 'tim' }, { name: 'PROFESSOR PRISMA', look: 'prisma' },
 ];
 // story beats per level: wave -> lines shown before that wave; who = 'hero', 'guard' or a boss key; {hero} = the hero's name
 const BEATS = [
   {
-    1: [['guard', 'Va? Ballonger? I min glänta? Jag trodde det var kalas!'], ['hero', 'Det är minions, Farfar. Rufus har skickat dem.'], ['guard', 'Minions? Är det en sorts sallad?']],
-    5: [['guard', '{hero}, jag har räknat morötterna två gånger. Det blev olika varje gång.'], ['hero', 'Det är för att minionerna tar dem!']],
-    10: [['krax', 'Krax! Jag ser nåt glänsande i gläntan!'], ['guard', 'Det är mina glasögon! Rör dem inte!']],
-    15: [['guard', 'När jag var ung poppade vi ballonger med bara tänderna.'], ['hero', 'Farfar, du har inga tänder.'], ['guard', 'Precis. Så tufft var det.']],
+    1: [['guard', 'Va? Ballonger? På mitt torg? Jag trodde det var marknad!'], ['hero', 'Det är minions, Gustav. Maskgänget har skickat dem.'], ['guard', 'Minions? Är det en sorts korv?']],
+    5: [['guard', '{hero}, jag har räknat kristallerna två gånger. Det blev olika varje gång.'], ['hero', 'Det är för att minionerna tar dem!']],
+    10: [['krax', 'Krax! Jag ser nåt glänsande på torget!'], ['guard', 'Det är mina glasögon! Rör dem inte!']],
+    15: [['guard', 'När jag var ung tände jag alla lyktor i staden. Med en tändsticka.'], ['hero', 'Det låter som mycket jobb.'], ['guard', 'Det var det. Jag är fortfarande trött.']],
     20: [['gunnar', 'Zzz... va? Är det min tur? Okej. Gräv, gräv...']],
-    25: [['hero', 'Varför har minionerna solglasögon?'], ['guard', 'De tror att de är coola. De har fel.']],
+    25: [['hero', 'Varför har minionerna solglasögon? Det är ju natt.'], ['guard', 'De tror att de är coola. De har fel.']],
     30: [['majken', 'Jag har putsat min plåt! Ni får inte spegla er i den!']],
     35: [['guard', 'Ugglan Ugo har lovat att komma. Han är alltid sen. Han sover på dagen.']],
     40: [['ugo', 'Hoo-hoo! Jag är inte sen. Jag är strategiskt försenad.']],
-    45: [['rufus', 'Fem vågor kvar, kaniner! Sen blir gläntan MIN!'], ['hero', 'Sen är den fortfarande vår, Rufus.']],
-    50: [['rufus', 'Okej, nu kommer jag själv. Men bara för att alla andra är fega!'], ['guard', 'Ska jag hämta käppen?'], ['hero', 'Sitt kvar, Farfar. Jag tar honom.']],
+    45: [['rufus', 'Fem vågor kvar! Sen blir torget MITT!'], ['hero', 'Sen är det fortfarande vårt, Rufus.']],
+    50: [['rufus', 'Okej, nu kommer jag själv. Men bara för att alla andra är fega!'], ['guard', 'Ska jag hämta käppen?'], ['hero', 'Sitt kvar, Gustav. Jag tar honom.']],
   },
   {
-    1: [['guard', 'PRRRT! Ingen spring vid vattnet! Det gäller minions också!'], ['hero', 'De lyssnar inte, Bosse.'], ['guard', 'Då blåser jag högre. PRRRRRT!']],
+    1: [['guard', 'Ohoj, {hero}! Inga minions på mina kanaler! Det står på skylten!'], ['hero', 'De kan inte läsa, kapten.'], ['guard', 'Då ritar jag en ny skylt. Med bilder.']],
     6: [['guard', 'Plåtminions kan inte simma. Jag har kollat. De sjönk som... plåt.']],
-    10: [['krax', 'Krax! Jag vill bara dricka lite vatten. Och ta alla morötter.']],
-    14: [['hero', 'Bosse, varför har du simfötter på dig?'], ['guard', 'Ifall att. Man vet aldrig.']],
-    20: [['majken', 'Vera vill att jag plåtar in hela sjön. Det blir ett plåtdike!']],
+    10: [['krax', 'Krax! Jag ville bara åka båt. Och ta alla kristaller.']],
+    14: [['hero', 'Kajsa, varför har du flytväst på dig på land?'], ['guard', 'Ifall att. Man vet aldrig.']],
+    20: [['majken', 'Vera vill att jag plåtar in hela kanalen. Det blir ett plåtdike!']],
     25: [['guard', 'Vet du varför minions aldrig badar? De är rädda för att bli blöta ballonger.']],
     30: [['gunnar', 'Zzz... är vattnet varmt? Då tar jag en tupplur i det.']],
-    35: [['vera', 'Mina 4 000 burkar är redo. Hela vattenhålet ska på burk!'], ['guard', 'Det låter inte alls hälsosamt!']],
+    35: [['vera', 'Mina 4 000 burkar är redo. Hela kanalen ska på burk!'], ['guard', 'Det låter inte alls hälsosamt!']],
     40: [['vera', 'Nu kommer jag! Med en burköppnare som backup.'], ['hero', 'Okej Vera. Nu sätter vi på locket.']],
   },
   {
-    1: [['guard', 'Psst, {hero}. Dimman har öron. Och svampar. Mest svampar.']],
-    5: [['guard', 'De osynliga minionerna är här. Jag ser dem inte. Vilket bevisar det!'], ['hero', 'Det bevisar ingenting, doktorn.']],
+    1: [['guard', 'Psst, {hero}. Ångan har öron. Och rör. Mest rör.']],
+    5: [['guard', 'De osynliga minionerna är här. Jag ser dem inte. Vilket bevisar det!'], ['hero', 'Det bevisar ingenting, Mutter.']],
     10: [['gunnar', 'Jag grävde fel och hamnade här. Men nu när jag är här... gräv, gräv!']],
-    15: [['hero', 'Doktorn, kan man äta den där svampen?'], ['guard', 'Alla svampar kan ätas. Vissa bara en gång.']],
-    20: [['ugo', 'Hoo! I dimman är jag kung! Eller uggla. Kunguggla.']],
+    15: [['hero', 'Mutter, vad gör den där stora maskinen?'], ['guard', 'Den gör ånga. Och ångan gör... mer ånga.']],
+    20: [['ugo', 'Hoo! I ångan är jag kung! Eller uggla. Kunguggla.']],
     25: [['guard', 'Jag har uppfunnit glasögon som ser osynliga saker. De är osynliga också. Jag hittar dem inte.']],
-    30: [['majken', 'Hallå? Var är alla? Dimman förstör min frisyr!']],
-    35: [['lova', 'Ni ser mig inte... och nu ser ni mig inte igen...'], ['hero', 'Vi ser dig, Lova. Du står bakom en svamp.']],
+    30: [['majken', 'Hallå? Var är alla? Ångan förstör min frisyr!']],
+    35: [['lova', 'Ni ser mig inte... och nu ser ni mig inte igen...'], ['hero', 'Vi ser dig, Lova. Du står bakom ett rör.']],
     40: [['lova', 'Okej, jag kommer fram. Men bara för att jag har gått vilse.']],
   },
   {
     1: [['guard', 'Hej {hero}! Titta inte ner. Jag tittade ner en gång. Är fortfarande inte okej.']],
-    5: [['hero', 'Bergis, du bor ju på ett berg.'], ['guard', 'Ja. Det är ett av mina största misstag.']],
-    10: [['majken', 'Jag bar plåtballongen hela vägen upp. Ni anar inte hur tung den är!']],
-    15: [['guard', 'Ottar säger att han är snabbast i skogen. Snigeln Sigge slog honom förra året.']],
+    5: [['hero', 'Tim, du heter ju Taklöpar-Tim.'], ['guard', 'Ja. Det är ett av mina största misstag.']],
+    10: [['majken', 'Jag bar plåtballongen hela vägen upp på taket. Ni anar inte hur tung den är!']],
+    15: [['guard', 'Ottar säger att han är snabbast i staden. Snigeln Sigge slog honom förra året.']],
     20: [['ugo', 'Hoo-hoo! Härifrån ser jag allt! ...Var är jag?']],
-    25: [['hero', 'Vem har ätit alla blåbär?'], ['guard', 'Inte jag.'], ['hero', 'Du är blå i hela ansiktet, Bergis.']],
-    30: [['lova', 'Jag smyger uppför berget. Det är jättejobbigt att smyga i uppförsbacke.']],
-    35: [['guard', 'Ottar har övat landningar hela veckan. Det hörs. Hela tiden.']],
+    25: [['hero', 'Vem har ätit upp alla blåbärsbullar?'], ['guard', 'Inte jag.'], ['hero', 'Du är blå i hela ansiktet, Tim.']],
+    30: [['lova', 'Jag smyger över taken. Det är jättejobbigt att smyga i uppförsbacke.']],
+    35: [['guard', 'Ottar har övat landningar hela veckan. Det hörs. På taket. Hela tiden.']],
     40: [['ottar', 'Nu kommer jag i full fart! Flytta på er!'], ['guard', 'Han kommer att landa på mig. Jag vet det.']],
   },
   {
-    1: [['guard', 'Välkommen till Gamla Eken, {hero}. Guldmoroten litar på dig. Jag också. Mest Guldmoroten.']],
-    6: [['hero', 'Varför vill Ulv ha Guldmoroten?'], ['guard', 'Han vill bli kung över skogen. Och han har slut på nattlampor.']],
-    10: [['ugo', 'Hoo... Ulv sa att jag får sova i eken om jag hjälper honom.']],
-    15: [['guard', 'Ekens rötter når hela skogen. De kittlas när minions trampar på dem.']],
+    1: [['guard', 'Välkommen till Måntornet, {hero}. Månkristallen litar på dig. Jag också. Mest kristallen.']],
+    6: [['hero', 'Varför vill Ulv ha Månkristallen?'], ['guard', 'Han vill bli kung över staden. Och han har slut på nattlampor.']],
+    10: [['ugo', 'Hoo... Ulv sa att jag får sova i tornet om jag hjälper honom.']],
+    15: [['guard', 'Kristallen lyser upp hela staden. Den kittlas när minions går förbi.']],
     20: [['vera', 'Jag är tillbaka! Med fler burkar och ännu sämre humör!']],
     25: [['hero', 'Alla bossar kommer tillbaka. Lär de sig aldrig?'], ['guard', 'Nej. Det är därför de är skurkar.']],
-    30: [['lova', 'Jag har varit här hela tiden. I ett träd. Jag är bra på träd.']],
-    35: [['guard', '{hero}, klarar vi det här bjuder jag på morotstårta. Med extra morot.']],
+    30: [['lova', 'Jag har varit här hela tiden. I en skorsten. Jag är bra på skorstenar.']],
+    35: [['guard', '{hero}, klarar vi det här bjuder jag på tårta. Den lyser i mörkret.']],
     40: [['ottar', 'Ulv lovade mig en landningsbana! Därför är jag här!']],
-    45: [['ulv', 'Hela skogen ska yla mitt namn! ULV! ULLLV!'], ['hero', 'Det låter mest som att du har ont i magen.']],
+    45: [['ulv', 'Hela staden ska yla mitt namn! ULV! ULLLV!'], ['hero', 'Det låter mest som att du har ont i magen.']],
     50: [['ulv', 'Nu kommer kungen själv! Buga! ...Ingen bugar?'], ['guard', 'Ingen bugar, Ulv.']],
   },
 ];
 const POPWORDS = ['POFF!', 'PANG!', 'PLOPP!', 'SPLOFF!', 'PFFT!', 'POP!'];
 const MENU_JOKES = [
-  'Inga kaniner skadades. Minionerna däremot...',
-  'Morötter är bra för synen. Fråga Spejaren.',
+  'Inga ingenjörer skadades. Minionerna däremot...',
+  'Kristaller lyser bäst i mörker. Precis som Linnéa.',
   'Räven Rufus har fortfarande inte förstått varför.',
   'Minions kan inte simma. De har testat.',
   'Tips: Minions hatar vassa saker. Och hjärtan.',
-  'Kråkan Krax tror att morötter är guld.',
+  'Kråkan Krax tror att kristaller är godis.',
   'Linnéa har aldrig haft en dålig hårdag. Aldrig.',
   'Torstens hammare heter Hilda. Säg hej till Hilda.',
 ];
+// a dark violet city at night; glow = the colour of lamps and crystals in that district
 const THEMES = [
-  { grass: '#74d04f', path: '#f0cf8c', edge: '#b5834a', deco: ['bush', 'flower'] },
-  { grass: '#6cc96a', path: '#ead49a', edge: '#a88a4a', deco: ['reed', 'flower'] },
-  { grass: '#5aa94e', path: '#dcb57f', edge: '#8a6a3a', deco: ['mush', 'flower'] },
-  { grass: '#86c25e', path: '#e6c98f', edge: '#9a7b4a', deco: ['berry', 'stone'] },
-  { grass: '#64b84f', path: '#efcf8a', edge: '#a8793a', deco: ['leaf', 'flower'] },
+  { ground: '#3a2c4e', tile: '#45365c', path: '#8a7aa6', edge: '#2a1f3c', glow: '#ffb35c', deco: ['crate', 'lamp'] },
+  { ground: '#2c2c4e', tile: '#36365e', path: '#7d7ea8', edge: '#22223e', glow: '#5ee7ff', deco: ['barrel', 'puddle'] },
+  { ground: '#2e2a3a', tile: '#3a3446', path: '#80768e', edge: '#221e2c', glow: '#7dff9a', deco: ['pipe', 'gear'] },
+  { ground: '#3e2a4a', tile: '#4a3458', path: '#977a9e', edge: '#2c1e36', glow: '#ff7ad9', deco: ['chimney', 'crate'] },
+  { ground: '#261e3e', tile: '#30284c', path: '#8c80b4', edge: '#1c1630', glow: '#c77dff', deco: ['gear', 'lamp'] },
 ];
-// specs: [first wave, balloon spec, weight, last wave?]; a spec is a kind plus optional +seg/+plat/+camo
-// bosses: wave -> boss key; unlocks: wave -> rabbit handed over when that boss pops
+// specs: [first wave, minion spec, weight, last wave?]; a spec is a kind plus optional +seg/+plat/+camo
+// bosses: wave -> boss key; unlocks: wave -> tower handed over when that boss pops
 const LEVELS = [
-  { name: 'SKOGSGLÄNTAN', waves: 50,
-    story: 'I gläntan leker kaninungarna hela dagarna. Räven Rufus vill göra den till sitt jaktområde, och han har skickat sina hantlangare först!',
+  { name: 'LYKTTORGET', waves: 50,
+    story: 'På Lykttorget brinner stadens lyktor hela natten. Maskgänget från Djupet vill släcka dem, och Räven Rufus har skickat sina hantlangare först!',
     wps: [[-1,2],[7,2],[7,5],[1,5],[1,8],[7,8],[7,11],[9,11]],
-    blocked: [[0,0,'tree'],[8,0,'tree'],[0,12,'tree'],[8,6,'tree']],
+    blocked: [[0,0,'lamp'],[8,0,'lamp'],[0,12,'lamp'],[8,6,'lamp']],
     bosses: { 10: 'krax', 20: 'gunnar', 30: 'majken', 40: 'ugo', 50: 'rufus' },
     unlocks: { 10: 2, 20: 3, 30: 4, 40: 5 },
     specs: [[1,'r',3,32],[3,'y',2],[6,'b',2],[9,'r+seg',1.5],[13,'r+plat',1.5],[17,'k',1.5],[23,'r+camo',1.5],[27,'b+seg',1],[31,'b+plat',1],[35,'y+camo',1],[39,'k+plat',1],[44,'b+camo+seg',1],[47,'k+camo',1]] },
-  { name: 'VATTENHÅLET', waves: 40,
-    story: 'Vid vattenhålet dricker alla djur i skogen. Vesslan Vera vill stänga in vattnet bakom plåt.',
+  { name: 'KANALERNA', waves: 40,
+    story: 'Genom kanalerna flyter stadens lysande vatten. Vesslan Vera vill stänga in allt vatten bakom plåt.',
     wps: [[-1,1],[4,1],[4,4],[1,4],[1,7],[7,7],[7,10],[3,10],[3,12],[9,12]],
     blocked: [[6,3,'water'],[7,3,'water'],[8,3,'water'],[6,4,'water'],[7,4,'water'],[8,4,'water'],[3,8,'water'],[4,8,'water'],[3,9,'water'],[4,9,'water']],
     bosses: { 10: 'krax', 20: 'majken', 30: 'gunnar', 40: 'vera' },
     specs: [[1,'r',3,22],[1,'y',2],[3,'b',2],[5,'r+plat',1.5],[8,'r+seg',1.2],[12,'k',1.5],[16,'b+plat',1],[22,'r+camo',1],[28,'k+plat',1],[34,'b+camo',1]] },
-  { name: 'SVAMPDALEN', waves: 40,
-    story: 'Svampdalen är full av dimma och hemliga gångar. Lodjuret Lova smyger osynlig genom dimman.',
+  { name: 'ÅNGVERKEN', waves: 40,
+    story: 'I Ångverken pyser maskinerna dag och natt. Lodjuret Lova smyger osynlig genom ångan.',
     wps: [[4,-1],[4,3],[7,3],[7,6],[1,6],[1,9],[5,9],[5,12],[9,12]],
-    blocked: [[0,0,'rock'],[8,1,'rock'],[2,3,'rock'],[8,9,'rock'],[0,11,'rock']],
+    blocked: [[0,0,'boiler'],[8,1,'boiler'],[2,3,'boiler'],[8,9,'boiler'],[0,11,'boiler']],
     bosses: { 10: 'gunnar', 20: 'ugo', 30: 'majken', 40: 'lova' },
     specs: [[1,'r',2,22],[1,'y',1.5],[1,'b',2],[3,'r+seg',1],[5,'r+camo',2],[9,'k',1.2],[13,'b+plat',1],[18,'y+camo',1.5],[24,'b+camo',1],[30,'k+camo',1],[35,'b+camo+seg',1]] },
-  { name: 'BLÅBÄRSBERGET', waves: 40,
-    story: 'Från Blåbärsberget ser man hela skogen. Örnen Ottar vill ha utsikten och alla blåbär för sig själv.',
+  { name: 'TAKEN', waves: 40,
+    story: 'Från taken ser man hela staden. Örnen Ottar vill ha utsikten och alla blåbärsbullar för sig själv.',
     wps: [[-1,0],[7,0],[7,2],[1,2],[1,4],[7,4],[7,6],[1,6],[1,8],[7,8],[7,10],[1,10],[1,12],[9,12]],
-    blocked: [[8,0,'berrybush'],[0,11,'berrybush'],[4,5,'berrybush']],
+    blocked: [[8,0,'chimney'],[0,11,'chimney'],[4,5,'chimney']],
     bosses: { 10: 'majken', 20: 'ugo', 30: 'lova', 40: 'ottar' },
     specs: [[1,'y',2],[1,'b',2],[3,'b+plat',1],[3,'r+seg',1],[6,'k',1.5],[9,'b+camo',1],[14,'y+seg',1.2],[19,'k+plat',1],[25,'b+camo+seg',1],[32,'k+camo',1]] },
-  { name: 'GAMLA EKEN', waves: 50,
-    story: 'Under Gamla Eken växer Guldmoroten som håller skogen grön. Vargkungen Ulv har samlat alla sina hantlangare. Nu gäller det!',
+  { name: 'MÅNTORNET', waves: 50,
+    story: 'I Måntornet svävar Månkristallen som lyser upp hela staden. Vargkungen Ulv har samlat hela Maskgänget. Nu gäller det!',
     wps: [[-1,6],[2,6],[2,2],[6,2],[6,10],[3,10],[3,12],[9,12]],
-    blocked: [[7,10,'oak'],[8,10,'oak'],[7,11,'oak'],[8,11,'oak']],
+    blocked: [[7,10,'core'],[8,10,'core'],[7,11,'core'],[8,11,'core']],
     bosses: { 10: 'ugo', 20: 'vera', 30: 'lova', 40: 'ottar', 50: 'ulv' },
     specs: [[1,'b',2],[1,'y',2],[3,'r+camo',1],[3,'b+plat',1],[6,'k',1.5],[9,'b+seg',1],[13,'k+camo',1],[18,'b+plat+camo',1],[24,'y+camo+seg',1.2],[30,'k+plat',1],[38,'b+camo+seg',1]] },
 ];
-// level select map: one node per place, from the meadow at the bottom up to the oak
+// level select map: one node per district, from the square at the bottom up to the moon tower
 const MAP = [[120, 590], [400, 520], [150, 445], [395, 370], [270, 295]];
 const STORY = [
-  'Djupt inne i Morotsskogen bor kaninväktarna. Varje kanin vaktar en speciell plats: gläntan, vattenhålet, svampdalen, blåbärsberget och Gamla Eken.',
-  'Under Gamla Eken växer Guldmoroten. Den håller hela skogen grön och glad.',
-  'Rovdjuren vill ta över skogen, men de fångar aldrig kaninerna – kaniner är alldeles för snabba! Så Räven Rufus kom på en lömsk plan: MINIONS gjorda av ballonger.',
-  'Varför just ballonger? Rufus säger att de var "billiga på rea".',
-  'Minionerna marscherar in och stjäl kaninernas morötter. Tar rovdjuren alla morötter vissnar skogen, och då blir den deras.',
-  'Men kaninerna har fått hjälp: hjältinnan LINNÉA, som skjuter hjärtan. Ställ ut kaniner, flytta Linnéa dit det behövs och poppa varenda minion!',
+  'Skuggstaden vaknar när solen går ner. Lyktorna tänds, kanalerna glittrar och ångmaskinerna pyser i natten.',
+  'Högst upp i Måntornet svävar Månkristallen. Den ger staden ljus och energi, och små kristaller från den lyser i varje kvarter.',
+  'Men långt nere i Djupet bor Maskgänget. De bär djurmasker och vill ta alla kristaller. De vågar inte slåss själva, så de skickar MINIONS gjorda av ballonger.',
+  'Varför just ballonger? Räven Rufus säger att de var "billiga på rea".',
+  'Tar minionerna alla kristaller slocknar staden, och då blir den Maskgängets.',
+  'Stadens ingenjörer bygger försvarstorn längs gatorna. Och de har fått hjälp: hjältinnan LINNÉA, som skjuter hjärtan. Bygg torn, flytta Linnéa dit det behövs och poppa varenda minion!',
 ];
 
 function rnd(a, b, c) {
@@ -417,9 +421,9 @@ function mkLevel(def, idx) {
     const key = c + ',' + r;
     if (cells.has(key) || blocked.has(key)) continue;
     const x0 = c * CS, y0 = GY + r * CS, q = rnd(c, r, idx + 1);
-    if (q < .14) deco.push({ kind: theme.deco[0], x: x0 + 14 + rnd(c, r, 2) * 32, y: y0 + 14 + rnd(c, r, 3) * 32 });
-    else if (q < .55) deco.push({ kind: theme.deco[1], x: x0 + 8 + rnd(c, r, 4) * 44, y: y0 + 8 + rnd(c, r, 5) * 44, col: pal[(rnd(c, r, 6) * 4) | 0] });
-    if (rnd(c, r, 9) < .7) deco.push({ kind: 'tuft', x: x0 + 6 + rnd(c, r, 7) * 48, y: y0 + 10 + rnd(c, r, 8) * 44 });
+    if (q < .1) deco.push({ kind: theme.deco[0], x: x0 + 16 + rnd(c, r, 2) * 28, y: y0 + 16 + rnd(c, r, 3) * 28 });
+    else if (q < .2) deco.push({ kind: theme.deco[1], x: x0 + 14 + rnd(c, r, 4) * 32, y: y0 + 14 + rnd(c, r, 5) * 32, col: pal[(rnd(c, r, 6) * 4) | 0] });
+    if (rnd(c, r, 9) < .35) deco.push({ kind: 'crack', x: x0 + 10 + rnd(c, r, 7) * 40, y: y0 + 10 + rnd(c, r, 8) * 40 });
   }
   const len = cum[cum.length - 1], pebbles = [];
   const tmp = {};
@@ -463,7 +467,7 @@ function buildWave(lv, n) {
   return list;
 }
 function stats(t) {
-  const R = RABBITS[t.type];
+  const R = TOWERS[t.type];
   const s = Object.assign({ camo: false, aura: false, splash: 0, slow: 0, stun: 0, strip: false, chain: 1, count: 1, pierce: 1, income: 0 }, R.base);
   if (t.rangeUp && s.range) s.range = RANGE_UP;
   for (let i = 0; i < t.lvl - 1; i++) R.ups[i].f(s);
@@ -476,8 +480,8 @@ function heroStats(h) {
   for (const k of h.items) ITEMS.find(it => it.key === k).f(s);
   return s;
 }
-const moveCost = t => Math.round(RABBITS[t.type].cost * BAL.moveCost);
-const rangeCost = t => Math.round(RABBITS[t.type].cost * BAL.rangeCost);
+const moveCost = t => Math.round(TOWERS[t.type].cost * BAL.moveCost);
+const rangeCost = t => Math.round(TOWERS[t.type].cost * BAL.rangeCost);
 const countOf = i => g.towers.filter(t => t.type === i).length;
 function canHurt(e, dtype) {
   if (!dtype) return false;
@@ -490,7 +494,7 @@ function bossTraits(b) {
   const t = [];
   if (b.props.plat) t.push('PLÅT – bara explosioner biter');
   if (b.props.seg) t.push('GUMMI – bara vassa saker biter');
-  if (b.props.camo) t.push('OSYNLIG – behöver Spejarkanin');
+  if (b.props.camo) t.push('OSYNLIG – behöver Spaningstorn');
   if (b.ability === 'spawn') t.push('Släpper ut svärdminions');
   if (b.ability === 'spawnk') t.push('Släpper ut klanminions');
   if (b.ability === 'dash') t.push('Gör supersnabba ryck');
@@ -500,11 +504,11 @@ function bossTraits(b) {
 function bossCounters(b) {
   const out = [];
   if (b.props.camo) out.push(3);
-  RABBITS.forEach((R, i) => {
+  TOWERS.forEach((R, i) => {
     if (!R.dtype || out.includes(i) || !canHurt(b.props, R.dtype)) return;
     if (R.dtype === b.weak) out.unshift(i);
   });
-  RABBITS.forEach((R, i) => { if (R.dtype && !out.includes(i) && canHurt(b.props, R.dtype)) out.push(i); });
+  TOWERS.forEach((R, i) => { if (R.dtype && !out.includes(i) && canHurt(b.props, R.dtype)) out.push(i); });
   return out.slice(0, 4);
 }
 
@@ -681,7 +685,7 @@ function kill(e, src) {
     pop(W / 2, 440, 'BOSSBONUS +' + e.gold, '#ffd23b', 24);
     say({ x: e.x, y: e.y }, e.boss.defeat, 3.2, 40);
     sfx(160, .5, 'triangle', .06, 500);
-    if (e.unlock != null && !rabbitUnlocked(e.unlock)) { save.rabbits.push(e.unlock); persist(); g.modals.push({ kind: 'unlock', i: e.unlock, boss: e.boss }); }
+    if (e.unlock != null && !towerUnlocked(e.unlock)) { save.TOWERS.push(e.unlock); persist(); g.modals.push({ kind: 'unlock', i: e.unlock, boss: e.boss }); }
   } else {
     if (e.kind === 'k' || Math.random() < .28) comicPop(e.x, e.y - 8, pick(POPWORDS), pick(['#ff7ad9', '#ffd23b', '#4fc3ff', '#7dff7d']));
     pop(e.x + 14, e.y - 20, '+' + e.gold, '#ffe14d', 14);
@@ -699,7 +703,7 @@ function nearest(x, y, r, ok) {
   return best;
 }
 function pickTargets(t) {
-  const s = t.s, dt = RABBITS[t.type].dtype, list = [];
+  const s = t.s, dt = TOWERS[t.type].dtype, list = [];
   for (const e of g.enemies) {
     if (e.dead || (e.camo && !t.sees)) continue;
     if (!canHurt(e, dt) && !s.slow) continue;
@@ -720,7 +724,7 @@ function applyHit(p, e) {
     posAt(g.L, e.d, e);
   }
   if (p.slow) { e.slow = e.boss ? p.slow * .5 : p.slow; e.slowT = 1.6; }
-  // a frozen balloon cannot be refrozen right away, or ice rabbits could hold it forever
+  // a frozen balloon cannot be refrozen right away, or ice TOWERS could hold it forever
   if (p.stun && !e.boss && e.stunImm <= 0) { e.stunT = p.stun; e.stunImm = 2.5; }
   if (p.strip && e.camo) { e.camo = false; pop(e.x, e.y - 24, 'SYNS!', '#7dff7d'); }
 }
@@ -877,14 +881,14 @@ function finish(win) {
     save.stars[g.lv] = Math.max(save.stars[g.lv], stars);
   }
   save.run = null; persist();
-  let tip = 'Uppgradera dina kaniner, köp räckvidd och flytta hjälten dit det brinner!';
+  let tip = 'Uppgradera dina torn, köp räckvidd och flytta hjälten dit det brinner!';
   const worst = Object.entries(g.leaks).sort((a, b) => b[1] - a[1])[0];
   if (worst) tip = {
-    camo: 'Osynliga minions slank förbi. Ställ en SPEJARKANIN nära stigen!',
-    plat: 'Plåtminions kom igenom. Bara BOMBKANIN och Torsten biter på plåt!',
-    seg: 'Gummiminions studsade förbi. Använd vassa PILKANINER eller Linnéas hjärtan!',
-    y: 'De snabba sprintminionerna hann förbi. Sakta ner dem med ISKANIN!',
-    k: 'Klanminionerna sprack till många små. Ha fler kaniner längre fram!',
+    camo: 'Osynliga minions slank förbi. Bygg ett SPANINGSTORN nära gatan!',
+    plat: 'Plåtminions kom igenom. Bara MORTEL och Torsten biter på plåt!',
+    seg: 'Gummiminions studsade förbi. Använd vassa ARMBORSTTORN eller Linnéas hjärtan!',
+    y: 'De snabba sprintminionerna hann förbi. Sakta ner dem med FROSTKANON!',
+    k: 'Klanminionerna sprack till många små. Ha fler torn längre fram!',
     boss: 'En boss tog sig fram. Kolla bossens svagheter innan bossvågen!',
   }[worst[0]] || tip;
   endInfo = { win, stars, tip };
@@ -943,14 +947,14 @@ function update(dt) {
       pop(ex.x - 20, ex.y - 30, e.boss ? 'MUAHAHA!' : 'HIHI!', '#ff8a8a', 16);
       if (e.boss) say({ x: ex.x - 60, y: ex.y }, e.boss.win, 3, 40);
       else if (g.towers.length && Math.random() < .5) say(pick(g.towers), pick(LINES.leak));
-      if (g.leakAnnT <= 0) { g.leakAnnT = 14; announce('MOROTSLADAN ÄR UNDER ATTACK!', '#ff8a8a'); }
+      if (g.leakAnnT <= 0) { g.leakAnnT = 14; announce('KRISTALLFÖRRÅDET ÄR UNDER ATTACK!', '#ff8a8a'); }
       sfx(150, .25, 'sawtooth', .06, -60, 'leak');
       if (g.lives <= 0) { g.lives = 0; finish(false); }
     } else posAt(g.L, e.d, e);
   }
   const auras = g.towers.filter(t => t.s.aura);
   for (const t of g.towers) {
-    const s = t.s, R = RABBITS[t.type];
+    const s = t.s, R = TOWERS[t.type];
     t.kick = Math.max(0, t.kick - dt); t.hop = Math.max(0, t.hop - dt);
     if (!R.dtype || t === g.moving) continue;
     t.cd = Math.max(0, t.cd - dt);
@@ -1018,8 +1022,15 @@ function update(dt) {
 }
 
 // ---------- drawing helpers ----------
+// violet-black theme: panels are dark, so the dark text colours of the old light panels map to light ones
+const TEXT_ON_DARK = {
+  [INK]: '#efe6ff', '#8a6a3a': '#bfaee0', '#5a3a1a': '#e2d6f7', '#8a5a2b': '#d6c4f0', '#2f9e44': '#7dffb0', '#2f7d32': '#7dffb0',
+  '#c2410c': '#ffad7a', '#6c7388': '#8f84ad', '#8a5a00': '#ffd36b', '#7a7f94': '#8f84ad', '#5a3a8a': '#d2b3ff', '#a0522d': '#ff9b7a',
+  '#3b6a2a': '#cdb8f5', '#d32f2f': '#ff7a8a', '#8a8f9c': '#8f84ad',
+};
 function txt(s, x, y, size, color = '#fff', align = 'center', ink = INK) {
-  ctx.font = FONT.replace('{s}', size); ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+  if (!ink) color = TEXT_ON_DARK[color] || color;
+  ctx.font = (size >= 24 ? TFONT : FONT).replace('{s}', size); ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
   if (ink) { ctx.lineWidth = Math.max(3, size / 4.5); ctx.strokeStyle = ink; ctx.strokeText(s, x, y); }
   ctx.fillStyle = color; ctx.fillText(s, x, y);
 }
@@ -1066,15 +1077,29 @@ function vpaint(fill, y, h) {
   gr.addColorStop(0, t[0]); gr.addColorStop(.35, t[1]); gr.addColorStop(1, t[2]);
   return gr;
 }
+// light panel fills from the old look become dark violet panels with a thin gold frame
+const PANEL = {
+  '#fff3d6': '#2a1c44', '#ffffff': '#33224f', '#d9dce4': '#1d152e', '#c5cad6': '#1d152e', '#e3d6bd': '#231a36',
+  '#ffe1d6': '#3c1838', '#c9f2b8': '#1c3a36', 'rgba(255,243,214,.96)': 'rgba(34,22,56,.95)',
+};
+const BTN = {
+  '#3fbf5a': '#8a4dff', '#4d8dff': '#4a2f86', '#ff9b21': '#b8368f', '#ff5a5a': '#c2304f', '#c0713a': '#7a3a8a',
+  '#7d8cff': '#5a4dd6', '#8a8f9c': '#4a4060', '#ff5fa2': '#d9438c',
+};
 function card(x, y, w, h, fill, r = 14) {
-  ctx.fillStyle = 'rgba(0,0,0,.25)'; rr(x, y + 5, w, h, r); ctx.fill();
+  fill = PANEL[fill] || fill;
+  const dark = fill[0] === 'r' || PANEL_DARK.has(fill);
+  ctx.fillStyle = 'rgba(5,0,15,.4)'; rr(x, y + 5, w, h, r); ctx.fill();
   ctx.fillStyle = h < 140 ? vpaint(fill, y - h * .6, h * 2.4) : fill; ctx.strokeStyle = INK; ctx.lineWidth = 3.5; rr(x, y, w, h, r); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = 'rgba(255,255,255,.28)'; rr(x + 4, y + 4, w - 8, Math.min(h * .35, 40), Math.max(2, r - 4)); ctx.fill();
+  ctx.fillStyle = dark ? 'rgba(200,160,255,.08)' : 'rgba(255,255,255,.2)'; rr(x + 4, y + 4, w - 8, Math.min(h * .35, 40), Math.max(2, r - 4)); ctx.fill();
+  if (w > 40 && h > 26) { ctx.strokeStyle = dark ? 'rgba(212,175,90,.55)' : 'rgba(255,230,170,.35)'; ctx.lineWidth = 1.2; rr(x + 3.5, y + 3.5, w - 7, h - 7, Math.max(2, r - 3)); ctx.stroke(); }
 }
+const PANEL_DARK = new Set(Object.values(PANEL));
 function btn(x, y, w, h, label, color, fn, o = {}) {
   btns.push({ x, y, w, h, fn: o.disabled ? null : fn });
   if (label == null) return;
-  card(x, y, w, h, o.disabled ? '#aab0be' : o.dim ? '#8fa294' : color, 12);
+  color = BTN[color] || color;
+  card(x, y, w, h, o.disabled ? '#3a3248' : o.dim ? '#4a3f5e' : color, 12);
   if (o.active) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; rr(x - 3, y - 3, w + 6, h + 6, 15); ctx.stroke(); }
   const lines = String(label).split('\n'), sz = o.size || 18;
   lines.forEach((ln, i) => txt(ln, x + w / 2, y + h / 2 + (i - (lines.length - 1) / 2) * sz * 1.2, sz, o.disabled ? '#eef' : '#fff'));
@@ -1122,15 +1147,18 @@ function coin(x, y, r = 9) {
   circ(x, y, r, '#ffd23b', 2.5);
   ctx.strokeStyle = '#e0a800'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r * .55, 0, 7); ctx.stroke();
 }
-function carrotIcon(x, y, s = 1, rot = 0) {
+// the city's energy crystals: lives, the store at the end of the street and the moon tower
+function crystalIcon(x, y, s = 1, rot = 0, color = '#5ee7ff') {
   ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.scale(s, s);
-  ell(-4, -12, 3, 7, '#4cbb57', -.5, 2); ell(4, -12, 3, 7, '#4cbb57', .5, 2);
-  tri(-7, -6, 7, -6, 0, 14, '#ff9b21', 2.5);
-  ctx.strokeStyle = 'rgba(59,36,16,.5)'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.moveTo(-3, -1); ctx.lineTo(1, -1); ctx.moveTo(-1, 5); ctx.lineTo(2, 5); ctx.stroke();
+  ctx.shadowColor = color; ctx.shadowBlur = 12;
+  ctx.fillStyle = paint(color, 0, -2, 12); ctx.strokeStyle = INK; ctx.lineWidth = 2.2; ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.moveTo(0, -14); ctx.lineTo(8, -4); ctx.lineTo(0, 13); ctx.lineTo(-8, -4); ctx.closePath(); ctx.fill();
+  ctx.shadowBlur = 0; ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,.65)'; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(-8, -4); ctx.lineTo(0, -1); ctx.lineTo(8, -4); ctx.moveTo(0, -1); ctx.lineTo(0, 13); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.beginPath(); ctx.moveTo(-1, -11); ctx.lineTo(-5, -4); ctx.lineTo(-2, -3); ctx.closePath(); ctx.fill();
   ctx.restore();
-}
-function comic(x, y, text, s, color) {
+}function comic(x, y, text, s, color) {
   ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
   ctx.font = FONT.replace('{s}', 18);
   const w = Math.max(40, ctx.measureText(text).width * .75 + 18);
@@ -1141,67 +1169,75 @@ function comic(x, y, text, s, color) {
   ctx.restore();
 }
 
-// rabbits: every tower is a rabbit with its own accessory and held item; an = idle/firing animation
-function drawRabbit(type, x, y, ang, lvl = 0, alpha = 1, s = 1, an = null) {
-  const R = RABBITS[type], fur = R.fur, lift = an ? an.lift : 0, ear = an ? an.ear : 0, blink = an && an.blink;
-  ctx.save(); ctx.globalAlpha *= alpha; ctx.translate(x, y);
-  ctx.fillStyle = 'rgba(0,0,0,.22)'; ctx.beginPath(); ctx.ellipse(0, 22 * s, 20 * s * (1 - lift / 40), 7 * s, 0, 0, 7); ctx.fill();
-  ctx.translate(0, -lift); ctx.scale(s * (an ? an.sx : 1), s * (an ? an.sy : 1));
-  ell(-8, -24, 5.5, 13, fur, -.15 - ear); ell(8, -24, 5.5, 13, fur, .15 + ear);
-  ctx.fillStyle = '#ffb6c8'; ctx.beginPath(); ctx.ellipse(-8, -23, 2.4, 8, -.15 - ear, 0, 7); ctx.ellipse(8, -23, 2.4, 8, .15 + ear, 0, 7); ctx.fill();
-  ell(0, 15, 13, 9, fur);
-  ell(-6, 22, 5, 3, fur, 0, 2); ell(6, 22, 5, 3, fur, 0, 2);
-  circ(0, 0, 17, fur);
-  ctx.fillStyle = 'rgba(255,120,150,.45)'; ctx.beginPath(); ctx.arc(-10, 5, 3.5, 0, 7); ctx.arc(10, 5, 3.5, 0, 7); ctx.fill();
-  const look = R.dtype ? ang : Math.PI / 2;
-  if (type === 3) {
-    circ(-6, -2, 5.5, '#3b4a3b', 2); circ(6, -2, 5.5, '#3b4a3b', 2);
-    circ(-6, -2, 2.5, '#9fd8ff', 0); circ(6, -2, 2.5, '#9fd8ff', 0);
-  } else {
-    if (blink) { closedEye(-6, -2); closedEye(6, -2); } else { eye(-6, -2, 4.5, look); eye(6, -2, 4.5, look); }
-    if (type === 5) {
-      ctx.fillStyle = '#2b2b3a'; ctx.strokeStyle = INK; ctx.lineWidth = 2;
-      rr(-12, -7, 10, 8, 3); ctx.fill(); ctx.stroke(); rr(2, -7, 10, 8, 3); ctx.fill(); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(-2, -4); ctx.lineTo(2, -4); ctx.stroke();
-      ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.fillRect(-10, -6, 3, 2); ctx.fillRect(4, -6, 3, 2);
-    }
-  }
-  tri(-2.5, 5, 2.5, 5, 0, 8, '#ff8fb8', 1.5);
-  ctx.strokeStyle = INK; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(0, 8); ctx.quadraticCurveTo(-3, 11, -5, 9); ctx.moveTo(0, 8); ctx.quadraticCurveTo(3, 11, 5, 9); ctx.stroke();
-  ctx.fillStyle = '#fff'; ctx.strokeStyle = INK; ctx.lineWidth = 1.2; rr(-2.5, 9.5, 5, 4, 1); ctx.fill(); ctx.stroke();
-  // accessory
-  if (type === 0) { ctx.fillStyle = '#e53935'; ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(-17, -13, 34, 6, 3); ctx.fill(); ctx.stroke(); tri(15, -12, 24, -16, 22, -8, '#e53935', 1.5); }
-  else if (type === 1) {
-    ctx.fillStyle = '#4fc3ff'; ctx.strokeStyle = INK; ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.arc(0, -7, 17.5, Math.PI, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#e3f6ff'; rr(-18, -10, 36, 6, 3); ctx.fill(); ctx.stroke();
-    circ(0, -26, 5, '#fff', 2);
-  } else if (type === 2) {
-    ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(-17, -11); ctx.lineTo(17, -11); ctx.stroke();
-    circ(-6, -11, 5, '#7fd3ff', 2); circ(6, -11, 5, '#7fd3ff', 2);
-  } else if (type === 3) {
-    ell(0, -14, 20, 4, '#6b8e23', 0, 2);
-    ctx.fillStyle = '#7da832'; ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(-9, -25, 18, 11, 4); ctx.fill(); ctx.stroke();
-  } else if (type === 4) {
-    ell(0, -14, 23, 5, '#f2d16b', 0, 2);
-    ctx.fillStyle = '#f2d16b'; ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(-10, -26, 20, 12, 5); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#e53935'; ctx.fillRect(-10, -18, 20, 3);
-  }
-  // held item, pointing at the target
-  if (R.dtype) {
-    const hx = Math.cos(ang) * 24, hy = Math.sin(ang) * 24 + 6;
-    ctx.save(); ctx.translate(hx, hy); ctx.rotate(ang);
-    if (type === 0) {
-      ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(6, 0); ctx.stroke();
-      tri(6, -4, 6, 4, 13, 0, '#cfd6e0', 2); tri(-9, 0, -14, -5, -12, 0, '#e53935', 1.5); tri(-9, 0, -14, 5, -12, 0, '#e53935', 1.5);
-    } else if (type === 1) circ(0, 0, 6, '#ffffff', 2.5);
-    else if (type === 2) { tri(-6, -6, -6, 6, 10, 0, '#ff9b21', 2.5); ell(-8, 0, 3, 5, '#4cbb57', 0, 1.5); }
-    else if (type === 3) { ctx.strokeStyle = INK; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(-6, -7); ctx.lineTo(3, 0); ctx.lineTo(-6, 7); ctx.stroke(); ctx.strokeStyle = '#c98b4a'; ctx.lineWidth = 3; ctx.stroke(); ctx.lineCap = 'butt'; }
-    else if (type === 5) { circ(0, 0, 8, '#dff6ff', 2.5); ctx.strokeStyle = '#ffd23b'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, 5.5, 0, 7); ctx.stroke(); }
-    ctx.restore();
-  } else carrotIcon(15, 12, .7, .4);
+// towers: a stone plinth with a brass band, a glowing crystal and a machine on top, run by a small engineer;
+// an = { lift, sx, sy, blink }; sy < 1 means the tower just fired
+function gearShape(x, y, r, teeth, rot, fill) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  ctx.beginPath();
+  for (let i = 0; i < teeth * 2; i++) { const a = i * Math.PI / teeth, k = i % 2 ? .78 : 1; ctx.lineTo(Math.cos(a) * r * k, Math.sin(a) * r * k); }
+  ctx.closePath(); ctx.fillStyle = paint(fill, 0, 0, r); ctx.strokeStyle = INK; ctx.lineWidth = 1.8; ctx.fill(); ctx.stroke();
+  ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(0, 0, r * .28, 0, 7); ctx.fill();
   ctx.restore();
-  for (let i = 0; i < lvl - 1; i++) circ(x + (i - (lvl - 2) / 2) * 10 * s, y + 31 * s, 4 * s, '#ffd23b', 2);
+}
+function glowDot(x, y, r, color, blur = 12) {
+  ctx.save(); ctx.shadowColor = color; ctx.shadowBlur = blur; ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); ctx.restore();
+}
+function drawTower(type, x, y, ang, lvl = 0, alpha = 1, s = 1, an = null) {
+  const R = TOWERS[type], glow = R.color, lift = an ? an.lift : 0, rec = an ? Math.max(0, 1 - an.sy) * 40 : 0;
+  ctx.save(); ctx.globalAlpha *= alpha; ctx.translate(x, y);
+  ctx.fillStyle = 'rgba(5,0,15,.4)'; ctx.beginPath(); ctx.ellipse(0, 22 * s, 22 * s * (1 - lift / 40), 7 * s, 0, 0, 7); ctx.fill();
+  ctx.translate(0, -lift); ctx.scale(s, s);
+  // plinth
+  ell(0, 17, 21, 7.5, '#3a2e52', 0, 2.5);
+  ctx.fillStyle = vpaint('#53447a', 0, 20); ctx.strokeStyle = INK; ctx.lineWidth = 2.5; rr(-17, 1, 34, 16, 4); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = '#d4af5a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-15, 5.5); ctx.lineTo(15, 5.5); ctx.stroke();
+  ctx.save(); ctx.translate(0, 11.5); ctx.shadowColor = glow; ctx.shadowBlur = 10 + Math.sin(T * 3 + type) * 4;
+  ctx.fillStyle = glow; ctx.beginPath(); ctx.moveTo(0, -4.5); ctx.lineTo(3.5, 0); ctx.lineTo(0, 4.5); ctx.lineTo(-3.5, 0); ctx.closePath(); ctx.fill(); ctx.restore();
+  const bx = -Math.cos(ang) * rec, by = -Math.sin(ang) * rec;
+  if (type === 0) {
+    circ(0, -6, 12, '#6e4a32', 2.5); circ(0, -6, 5, '#d4af5a', 1.5);
+    ctx.save(); ctx.translate(bx, -6 + by); ctx.rotate(ang);
+    ctx.fillStyle = vpaint('#5a3a2a', -3, 6); ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(-6, -3, 22, 6, 2); ctx.fill(); ctx.stroke();
+    ctx.lineCap = 'round'; ctx.strokeStyle = INK; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(6, 0, 13, -1.25, 1.25); ctx.stroke();
+    ctx.strokeStyle = '#d4af5a'; ctx.lineWidth = 2.4; ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,240,210,.8)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(10.1, -12.3); ctx.lineTo(4 - rec, 0); ctx.lineTo(10.1, 12.3); ctx.stroke();
+    if (!rec) { ctx.strokeStyle = '#cfd6e0'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(4, 0); ctx.lineTo(20, 0); ctx.stroke(); glowDot(21, 0, 2.2, glow, 8); }
+    ctx.lineCap = 'butt'; ctx.restore();
+  } else if (type === 1) {
+    circ(0, -7, 13, '#33507e', 2.5);
+    ctx.save(); ctx.translate(bx, -7 + by); ctx.rotate(ang);
+    ctx.fillStyle = vpaint('#9fb8d8', -4, 8); ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(4, -4.5, 16, 9, 3); ctx.fill(); ctx.stroke();
+    ctx.restore();
+    ctx.save(); ctx.translate(bx + Math.cos(ang) * 20, -7 + by + Math.sin(ang) * 20); glowDot(0, 0, 3.5, glow, 14); ctx.restore();
+    ctx.save(); ctx.translate(0, -23 + Math.sin(T * 2.5) * 1.5); ctx.shadowColor = glow; ctx.shadowBlur = 14;
+    ctx.fillStyle = paint('#bff6ff', 0, 0, 7); ctx.strokeStyle = INK; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(5, 0); ctx.lineTo(0, 7); ctx.lineTo(-5, 0); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
+  } else if (type === 2) {
+    ell(0, -3, 15, 10, '#4a4460', 0, 2.5);
+    ctx.save(); ctx.translate(bx * .6, -8 + by * .6); ctx.rotate(ang - .6);
+    ctx.fillStyle = vpaint('#2e2a3e', -7, 14); ctx.strokeStyle = INK; ctx.lineWidth = 2.5; rr(-2, -7, 18, 14, 3); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#d4af5a'; ctx.fillRect(10, -7, 3, 14);
+    ell(16, 0, 3, 6.5, '#140b22', 0, 2); ctx.restore();
+    glowDot(-9, -6, 2.4, glow, 10);
+  } else if (type === 3) {
+    ctx.fillStyle = vpaint('#5a4a3a', -36, 36); ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(-3.5, -33, 7, 34, 2); ctx.fill(); ctx.stroke();
+    circ(0, -36, 7, '#3a3050', 2.2); glowDot(0, -36, 3.6, glow, 14);
+    ctx.save(); ctx.translate(0, -36); ctx.rotate(ang); ctx.fillStyle = '#d4af5a'; ctx.strokeStyle = INK; ctx.lineWidth = 1.5; rr(5, -2.5, 7, 5, 1.5); ctx.fill(); ctx.stroke(); ctx.restore();
+    gearShape(9 + bx * .5, -10 + by * .5, 7, 8, T * 3, '#c98b4a');
+  } else if (type === 4) {
+    ctx.fillStyle = vpaint('#6a5a2a', -26, 28); ctx.strokeStyle = INK; ctx.lineWidth = 2.5; rr(-13, -24, 26, 25, 4); ctx.fill(); ctx.stroke();
+    gearShape(0, -13, 8.5, 10, T * 1.5, '#ffd23b');
+    ctx.save(); ctx.shadowColor = glow; ctx.shadowBlur = 10; ctx.fillStyle = '#ffe58a'; ctx.fillRect(-8, -26, 16, 3); ctx.restore();
+    coin(14, 6, 4.5); coin(16, 2, 4.5);
+  } else {
+    ctx.fillStyle = vpaint('#3a2a5a', -24, 26); ctx.strokeStyle = INK; ctx.lineWidth = 2.5; rr(-5, -20, 10, 21, 3); ctx.fill(); ctx.stroke();
+    ell(0, -20, 9, 3.5, '#d4af5a', 0, 2);
+    crystalIcon(0, -34 + Math.sin(T * 2.4 + x) * 2, 1, Math.sin(T) * .15, glow);
+  }
+  drawPerson(LOOKS[R.op], -19, 13, ang, .46, { blink: an && an.blink, seed: type });
+  ctx.restore();
+  for (let i = 0; i < lvl - 1; i++) circ(x + (i - (lvl - 2) / 2) * 10 * s, y + 31 * s, 4 * s, '#d4af5a', 2);
 }
 // predators: angry-but-cute heads used for bosses
 function drawPredator(animal, x, y, s = 1) {
@@ -1250,13 +1286,26 @@ function drawPredator(animal, x, y, s = 1) {
   ctx.restore();
 }
 // heroes: chibi people with painted shading; an = { lift, cast, swing, blink, seed }
+// acc = what the person holds; cap, goggles and beard dress up the guardians and the tower engineers
 const LOOKS = {
-  linnea: { skin: '#ffd9bf', hair: '#7a4626', hair2: '#b77945', eyes: '#f2a516', top: '#fff2f6', skirt: '#d63c74', trim: '#ffd23b', boots: '#7a2a4a', ears: true, long: true },
-  torsten: { skin: '#f6cba6', hair: '#d9772b', hair2: '#f6b16a', eyes: '#3f7d3a', top: '#5aa84a', skirt: '#3f7a35', trim: '#c98b4a', boots: '#5a3a1a', band: '#e53935', big: true },
-  maja: { skin: '#ffe0cc', hair: '#c9c0ff', hair2: '#f4f1ff', eyes: '#5b6cff', top: '#33438f', skirt: '#24306e', trim: '#dfe4ff', boots: '#1d2450', tail: true },
+  linnea: { acc: 'heart', skin: '#ffd9bf', hair: '#7a4626', hair2: '#b77945', eyes: '#f2a516', top: '#fff2f6', skirt: '#d63c74', trim: '#ffd23b', boots: '#7a2a4a', ears: true, long: true },
+  torsten: { acc: 'hammer', skin: '#f6cba6', hair: '#d9772b', hair2: '#f6b16a', eyes: '#3f7d3a', top: '#5aa84a', skirt: '#3f7a35', trim: '#c98b4a', boots: '#5a3a1a', band: '#e53935', big: true },
+  maja: { acc: 'bow', skin: '#ffe0cc', hair: '#c9c0ff', hair2: '#f4f1ff', eyes: '#5b6cff', top: '#33438f', skirt: '#24306e', trim: '#dfe4ff', boots: '#1d2450', tail: true },
+  gustav: { acc: 'lantern', skin: '#f2c9a8', hair: '#d8d4e8', hair2: '#ffffff', eyes: '#5a4a7a', top: '#4a3a6e', skirt: '#2e2448', trim: '#d4af5a', boots: '#1e1630', big: true, beard: true, cap: 'tophat' },
+  kajsa: { acc: 'none', skin: '#e8b896', hair: '#2a1e3a', hair2: '#5a4a7a', eyes: '#3a7ad9', top: '#2d3f7a', skirt: '#1e2a58', trim: '#ffd23b', boots: '#141030', tail: true, cap: 'captain' },
+  mutter: { acc: 'wrench', skin: '#f6cba6', hair: '#ff8a3d', hair2: '#ffc28a', eyes: '#3f7d3a', top: '#6a5040', skirt: '#4a3628', trim: '#c98b4a', boots: '#2a1a14', big: true, goggles: true },
+  tim: { acc: 'none', skin: '#ffd9bf', hair: '#ffd23b', hair2: '#fff0a0', eyes: '#3a7ad9', top: '#b8368f', skirt: '#5a2a5a', trim: '#ffd23b', boots: '#2a1430', big: true, band: '#5ee7ff' },
+  prisma: { acc: 'crystal', skin: '#f2d6c4', hair: '#c77dff', hair2: '#efd6ff', eyes: '#9a4dff', top: '#3a2a6a', skirt: '#24184a', trim: '#5ee7ff', boots: '#140c2a', long: true, goggles: true },
+  op0: { acc: 'wrench', skin: '#e8b896', hair: '#5a3a2a', hair2: '#8a5a3a', eyes: '#3a2a1a', top: '#8a4a2a', skirt: '#5a3020', trim: '#d4af5a', boots: '#2a1a14', cap: 'cap' },
+  op1: { acc: 'wrench', skin: '#ffe0cc', hair: '#e8e8ff', hair2: '#ffffff', eyes: '#3a7ad9', top: '#2d5a7a', skirt: '#1e3a58', trim: '#5ee7ff', boots: '#141030', goggles: true },
+  op2: { acc: 'wrench', skin: '#c99a78', hair: '#2a2230', hair2: '#4a4058', eyes: '#3a2a1a', top: '#4a4458', skirt: '#2e2a3a', trim: '#ff7a3d', boots: '#1a1420', big: true, goggles: true },
+  op3: { acc: 'wrench', skin: '#f6cba6', hair: '#3a6a3a', hair2: '#6aa06a', eyes: '#2a5a2a', top: '#2f5a3a', skirt: '#1e3a26', trim: '#7dff9a', boots: '#142014', cap: 'cap' },
+  op4: { acc: 'wrench', skin: '#f2c9a8', hair: '#d9a066', hair2: '#f6c890', eyes: '#5a3a1a', top: '#7a6a2a', skirt: '#4a3e18', trim: '#ffd23b', boots: '#2a2010', cap: 'tophat' },
+  op5: { acc: 'wrench', skin: '#ffe0cc', hair: '#c77dff', hair2: '#efd6ff', eyes: '#9a4dff', top: '#3a2a6a', skirt: '#24184a', trim: '#c77dff', boots: '#140c2a', long: true },
 };
-function drawHero(key, x, y, ang = 0, s = 1, an = {}) {
-  const L = LOOKS[key], lift = an.lift || 0, cast = an.cast || 0, sway = Math.sin(T * 2.2 + (an.seed || 0));
+function drawHero(key, x, y, ang, s, an) { drawPerson(LOOKS[key], x, y, ang, s, an); }
+function drawPerson(L, x, y, ang = 0, s = 1, an = {}) {
+  const key = L.acc, lift = an.lift || 0, cast = an.cast || 0, sway = Math.sin(T * 2.2 + (an.seed || 0));
   const lx = Math.cos(ang) * 1.2, ly = Math.sin(ang) * .9, k = L.big ? 1.08 : 1;
   ctx.save(); ctx.translate(x, y);
   ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.ellipse(0, 24 * s, 18 * s * (1 - lift / 40), 6.5 * s, 0, 0, 7); ctx.fill();
@@ -1279,8 +1328,8 @@ function drawHero(key, x, y, ang = 0, s = 1, an = {}) {
   ctx.quadraticCurveTo(-13, 13, -7, 6); ctx.closePath(); ctx.fill(); ctx.stroke();
   ctx.strokeStyle = L.trim; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-13, 18.3); ctx.quadraticCurveTo(0, 21.6, 13, 18.3); ctx.stroke();
   ctx.fillStyle = vpaint(L.top, -2, 16); ctx.strokeStyle = INK; ctx.lineWidth = 2.5; rr(-8, 1, 16, 10, 4); ctx.fill(); ctx.stroke();
-  if (key === 'linnea') heart(0, 6.5, .36, '#ff5fa2', 1);
-  else if (key === 'torsten') { ctx.fillStyle = L.trim; ctx.fillRect(-7.5, 8, 15, 2.6); }
+  if (key === 'heart') heart(0, 6.5, .36, '#ff5fa2', 1);
+  else if (key === 'hammer') { ctx.fillStyle = L.trim; ctx.fillRect(-7.5, 8, 15, 2.6); }
   else { ctx.fillStyle = '#ffe58a'; ctx.beginPath(); ctx.arc(0, 6, 2.4, 0, 7); ctx.fill(); }
   ell(-10, 9, 3, 6, L.skin, .5, 2);
   // the arm with the weapon points at the target
@@ -1320,22 +1369,43 @@ function drawHero(key, x, y, ang = 0, s = 1, an = {}) {
   if (cast > 0) { ctx.fillStyle = '#7a2a3a'; ctx.beginPath(); ctx.ellipse(0, -2.5, 2, 2.4, 0, 0, 7); ctx.fill(); }
   else { ctx.beginPath(); ctx.arc(0, -4.5, 2.6, .2 * Math.PI, .8 * Math.PI); ctx.stroke(); }
   ctx.lineCap = 'butt';
-  if (key === 'linnea') heart(9.5, -24, .42, '#ff5fa2', 1.2);
-  if (key === 'maja') {
+  if (L.beard) {
+    ctx.fillStyle = paint(L.hair, 0, -2, 10); ctx.strokeStyle = INK; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-10, -5); ctx.quadraticCurveTo(-9, 6, 0, 8); ctx.quadraticCurveTo(9, 6, 10, -5); ctx.quadraticCurveTo(0, -1, -10, -5); ctx.fill(); ctx.stroke();
+  }
+  if (L.goggles) {
+    ctx.fillStyle = '#5a4030'; ctx.fillRect(-15, -21, 30, 3.5);
+    for (const gx of [-6, 6]) { circ(gx, -21, 4.6, '#d4af5a', 1.8); ctx.save(); ctx.shadowColor = L.trim; ctx.shadowBlur = 6; circ(gx, -21, 2.8, L.trim, 0); ctx.restore(); }
+  }
+  if (L.cap === 'cap') { ctx.fillStyle = paint(L.top, 0, -26, 14); ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, -21, 14, Math.PI, 0); ctx.closePath(); ctx.fill(); ctx.stroke(); ell(9, -21, 9, 2.6, L.top, 0, 2); }
+  else if (L.cap === 'tophat') { ell(0, -24, 16, 3.4, '#241a36', 0, 2); ctx.fillStyle = vpaint('#2e2244', -44, 20); ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(-9, -42, 18, 18, 2); ctx.fill(); ctx.stroke(); ctx.fillStyle = L.trim; ctx.fillRect(-9, -29, 18, 3); }
+  else if (L.cap === 'captain') { ctx.fillStyle = vpaint('#1e2a58', -34, 12); ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(-14, -33, 28, 9, 4); ctx.fill(); ctx.stroke(); ell(0, -23.5, 15, 2.6, '#141030', 0, 2); circ(0, -29, 2.6, '#ffd23b', 1.2); }
+  if (key === 'heart') heart(9.5, -24, .42, '#ff5fa2', 1.2);
+  if (key === 'bow') {
     ctx.fillStyle = '#ffe58a'; ctx.beginPath(); ctx.arc(-9, -24, 3.6, 0, 7); ctx.fill();
     ctx.fillStyle = L.hair; ctx.beginPath(); ctx.arc(-7.6, -25, 3, 0, 7); ctx.fill();
   }
   ctx.save(); ctx.translate(hx, hy);
-  if (key === 'linnea') {
+  if (key === 'heart') {
     heart(Math.cos(ang) * 6, Math.sin(ang) * 6 - 2 + Math.sin(T * 4) * 1.5, .75 + cast * .5, '#ff5fa2', 1.5, 10 + Math.sin(T * 5) * 4);
-  } else if (key === 'torsten') {
+  } else if (key === 'hammer') {
     // Hilda the hammer rests on the shoulder and swings down at the target
     const sw = an.swing || 0;
     ctx.rotate(-1.6 + (ang + 1.6) * sw);
     ctx.fillStyle = '#8a5a2b'; ctx.strokeStyle = INK; ctx.lineWidth = 1.8; rr(-2, -2, 24, 4, 2); ctx.fill(); ctx.stroke();
     ctx.fillStyle = vpaint('#9aa3b5', -9, 18); rr(19, -9, 13, 18, 3); ctx.fill(); ctx.stroke();
     ctx.fillStyle = '#ff9b21'; ctx.fillRect(23.5, -9, 4, 18);
-  } else {
+  } else if (key === 'wrench') {
+    ctx.rotate(-.9 + Math.sin(T * 3 + (an.seed || 0)) * .25);
+    ctx.fillStyle = vpaint('#b8bcd0', -3, 6); ctx.strokeStyle = INK; ctx.lineWidth = 1.6; rr(-1, -2, 13, 4, 2); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(14, 0, 4.5, .6, 5.7); ctx.fill(); ctx.stroke();
+  } else if (key === 'lantern') {
+    ctx.save(); ctx.shadowColor = '#ffb35c'; ctx.shadowBlur = 16 + Math.sin(T * 4) * 4;
+    ctx.fillStyle = '#ffd28a'; rr(-4, 0, 9, 11, 2); ctx.fill(); ctx.restore();
+    ctx.strokeStyle = INK; ctx.lineWidth = 1.6; rr(-4, 0, 9, 11, 2); ctx.stroke(); ctx.beginPath(); ctx.arc(.5, 0, 4, Math.PI, 0); ctx.stroke();
+  } else if (key === 'crystal') {
+    crystalIcon(3, -6 + Math.sin(T * 3) * 2, .7, 0, '#5ee7ff');
+  } else if (key === 'bow') {
     ctx.rotate(ang);
     ctx.strokeStyle = INK; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.beginPath(); ctx.arc(-2, 0, 12, -1.15, 1.15); ctx.stroke();
     ctx.strokeStyle = '#ffe58a'; ctx.lineWidth = 2.6; ctx.stroke();
@@ -1452,30 +1522,36 @@ function drawRange(x, y, r) {
   ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); ctx.stroke(); ctx.restore();
 }
 function drawDeco(d) {
-  const k = d.kind;
-  if (k === 'tuft') {
-    ctx.strokeStyle = 'rgba(30,90,30,.35)'; ctx.lineWidth = 2; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(d.x - 3, d.y); ctx.lineTo(d.x - 5, d.y - 6); ctx.moveTo(d.x, d.y); ctx.lineTo(d.x, d.y - 8); ctx.moveTo(d.x + 3, d.y); ctx.lineTo(d.x + 5, d.y - 6); ctx.stroke();
-    ctx.lineCap = 'butt';
+  const k = d.kind, x = d.x, y = d.y;
+  if (k === 'crack') {
+    ctx.strokeStyle = 'rgba(10,4,20,.35)'; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(x - 5, y - 2); ctx.lineTo(x - 1, y); ctx.lineTo(x + 2, y - 3); ctx.lineTo(x + 6, y - 1); ctx.stroke();
+  } else if (k === 'crate') {
+    ctx.fillStyle = 'rgba(5,0,15,.35)'; ctx.fillRect(x - 6, y + 6, 16, 4);
+    ctx.fillStyle = vpaint('#8a6040', y - 7, 14); ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(x - 8, y - 7, 16, 14, 2); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = 'rgba(20,10,5,.55)'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.moveTo(x - 7, y - 6); ctx.lineTo(x + 7, y + 6); ctx.moveTo(x + 7, y - 6); ctx.lineTo(x - 7, y + 6); ctx.stroke();
+  } else if (k === 'lamp') {
+    ctx.fillStyle = '#1e1630'; ctx.fillRect(x - 1.5, y - 10, 3, 14);
+    ctx.save(); ctx.shadowColor = '#ffb35c'; ctx.shadowBlur = 10; ctx.fillStyle = '#ffd28a'; rr(x - 3.5, y - 16, 7, 8, 2); ctx.fill(); ctx.restore();
+    ctx.strokeStyle = INK; ctx.lineWidth = 1.4; rr(x - 3.5, y - 16, 7, 8, 2); ctx.stroke();
+  } else if (k === 'barrel') {
+    ell(x, y, 8, 10, '#6a4a3a', 0, 2);
+    ctx.strokeStyle = '#d4af5a'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x - 8, y - 4); ctx.lineTo(x + 8, y - 4); ctx.moveTo(x - 8, y + 4); ctx.lineTo(x + 8, y + 4); ctx.stroke();
+  } else if (k === 'puddle') {
+    ctx.fillStyle = 'rgba(120,90,200,.35)'; ctx.beginPath(); ctx.ellipse(x, y, 11, 4.5, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(220,200,255,.35)'; ctx.beginPath(); ctx.ellipse(x - 3, y - 1, 4, 1.2, 0, 0, 7); ctx.fill();
+  } else if (k === 'pipe') {
+    ctx.fillStyle = vpaint('#6a6478', y - 4, 8); ctx.strokeStyle = INK; ctx.lineWidth = 1.8; rr(x - 13, y - 3.5, 26, 7, 3); ctx.fill(); ctx.stroke();
+    for (const px of [-8, 8]) { ctx.fillStyle = '#d4af5a'; rr(x + px - 2, y - 5, 4, 10, 1); ctx.fill(); ctx.stroke(); }
+  } else if (k === 'gear') {
+    gearShape(x, y, 7, 8, x * .1, '#a8864a');
+  } else if (k === 'chimney') {
+    ctx.fillStyle = vpaint('#7a3a3a', y - 8, 14); ctx.strokeStyle = INK; ctx.lineWidth = 1.8; rr(x - 6, y - 8, 12, 13, 1); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#2a1e2a'; ctx.fillRect(x - 7, y - 10, 14, 3);
   } else if (k === 'flower') {
-    ctx.fillStyle = d.col; ctx.strokeStyle = 'rgba(59,36,16,.6)'; ctx.lineWidth = 1.2;
-    for (let i = 0; i < 5; i++) { const a = i * 1.2566 + T * .2; ctx.beginPath(); ctx.arc(d.x + Math.cos(a) * 3, d.y + Math.sin(a) * 3, 2.4, 0, 7); ctx.fill(); }
-    ctx.fillStyle = '#ffb300'; ctx.beginPath(); ctx.arc(d.x, d.y, 1.8, 0, 7); ctx.fill();
-  } else if (k === 'bush' || k === 'berry') {
-    circ(d.x - 7, d.y + 3, 9, '#3fa64a', 2.5); circ(d.x + 7, d.y + 3, 9, '#3fa64a', 2.5); circ(d.x, d.y - 4, 10, '#4cbb57', 2.5);
-    circ(d.x - 3, d.y - 8, 3, 'rgba(255,255,255,.25)', 0);
-    if (k === 'berry') for (const [a, b] of [[-6, 2], [5, -3], [7, 5], [-1, -6]]) circ(d.x + a, d.y + b, 2.6, '#4a5bd6', 1.2);
-  } else if (k === 'reed') {
-    ctx.strokeStyle = '#2f7d32'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(d.x - 4, d.y + 10); ctx.lineTo(d.x - 5, d.y - 8); ctx.moveTo(d.x + 4, d.y + 10); ctx.lineTo(d.x + 5, d.y - 5); ctx.stroke();
-    ell(d.x - 5, d.y - 10, 2.5, 6, '#8a5a2b', 0, 1.5); ell(d.x + 5, d.y - 7, 2.5, 6, '#8a5a2b', 0, 1.5);
-  } else if (k === 'mush') {
-    ctx.fillStyle = '#fff3d6'; ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(d.x - 3, d.y - 2, 6, 10, 2); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#e53935'; ctx.beginPath(); ctx.arc(d.x, d.y - 2, 9, Math.PI, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
-    circ(d.x - 4, d.y - 6, 1.6, '#fff', 0); circ(d.x + 3, d.y - 7, 1.8, '#fff', 0);
-  } else if (k === 'stone') {
-    ell(d.x, d.y, 6, 4, '#b9bfc9', 0, 1.5);
-  } else if (k === 'leaf') {
-    ctx.fillStyle = d.col === '#ffffff' ? '#ff9b21' : '#ffc72c'; ctx.beginPath(); ctx.ellipse(d.x, d.y, 5, 2.5, d.x % 3, 0, 7); ctx.fill();
+    // a flower pot on a window sill: the city still likes a little green
+    ctx.fillStyle = '#a0522d'; rr(x - 3, y, 6, 5, 1); ctx.fill();
+    ctx.fillStyle = d.col; ctx.beginPath(); ctx.arc(x, y - 2, 2.6, 0, 7); ctx.fill();
   }
 }
 // the static part of a level is painted once into an offscreen canvas at 2x
@@ -1488,166 +1564,232 @@ function buildBg(i) {
   try { paintGround(def.L, THEMES[i], i); } finally { ctx = keep; T = keepT; }
   return def.bg = c;
 }
-function oakCenter(L) {
+function coreCenter(L) {
   let x = 0, y = 0, n = 0;
-  for (const [key, kind] of L.blocked) if (kind === 'oak') { const [c, r] = key.split(',').map(Number); x += c * CS + CS / 2; y += GY + r * CS + CS / 2; n++; }
+  for (const [key, kind] of L.blocked) if (kind === 'core') { const [c, r] = key.split(',').map(Number); x += c * CS + CS / 2; y += GY + r * CS + CS / 2; n++; }
   return n ? { x: x / n, y: y / n } : null;
 }
+// light sources that glow over the painted ground every frame
+function lightsOf(L) {
+  if (!L.lights) {
+    L.lights = [];
+    for (const [key, kind] of L.blocked) {
+      const [c, r] = key.split(',').map(Number), x = c * CS + CS / 2, y = GY + r * CS + CS / 2;
+      if (kind === 'lamp') L.lights.push({ x, y: y - 26, r: 90, warm: true });
+      if (kind === 'water') L.lights.push({ x, y, r: 40, warm: false });
+    }
+    for (const d of L.deco) if (d.kind === 'lamp') L.lights.push({ x: d.x, y: d.y - 12, r: 46, warm: true });
+  }
+  return L.lights;
+}
 function paintGround(L, th, idx) {
-  ctx.fillStyle = th.grass; ctx.fillRect(0, 0, W, H);
-  // loose painted blotches of warm light and cool shade
-  for (let i = 0; i < 80; i++) {
-    const x = rnd(i, 1, idx) * W, y = GY + rnd(i, 2, idx) * ROWS * CS, r = 40 + rnd(i, 3, idx) * 100, lite = rnd(i, 4, idx) < .5;
+  ctx.fillStyle = th.ground; ctx.fillRect(0, 0, W, H);
+  // plaza stones on every free cell, so it is clear where a tower fits
+  for (let c = 0; c < COLS; c++) for (let r = 0; r < ROWS; r++) {
+    const key = c + ',' + r;
+    if (L.cells.has(key) || L.blocked.has(key)) continue;
+    const x0 = c * CS, y0 = GY + r * CS, v = rnd(c, r, idx + 3);
+    ctx.fillStyle = vpaint(th.tile, y0 - 20, CS + 50); rr(x0 + 2, y0 + 2, CS - 4, CS - 4, 6); ctx.fill();
+    ctx.strokeStyle = 'rgba(10,4,20,.45)'; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(x0 + CS / 2 + (v - .5) * 8, y0 + 4); ctx.lineTo(x0 + CS / 2 + (v - .5) * 8, y0 + CS / 2);
+    ctx.moveTo(x0 + 4, y0 + CS / 2); ctx.lineTo(x0 + CS - 4, y0 + CS / 2);
+    ctx.moveTo(x0 + CS / 2 - (v - .5) * 10, y0 + CS / 2); ctx.lineTo(x0 + CS / 2 - (v - .5) * 10, y0 + CS - 4); ctx.stroke();
+    ctx.strokeStyle = 'rgba(210,180,255,.12)'; ctx.lineWidth = 1.5; rr(x0 + 3, y0 + 3, CS - 6, CS - 6, 5); ctx.stroke();
+  }
+  // painted blotches of violet light and deep shade
+  for (let i = 0; i < 70; i++) {
+    const x = rnd(i, 1, idx) * W, y = GY + rnd(i, 2, idx) * ROWS * CS, r = 40 + rnd(i, 3, idx) * 110, lite = rnd(i, 4, idx) < .45;
     const gr = ctx.createRadialGradient(x, y, 0, x, y, r);
-    gr.addColorStop(0, lite ? 'rgba(255,248,190,.16)' : 'rgba(20,50,60,.16)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    gr.addColorStop(0, lite ? 'rgba(190,140,255,.13)' : 'rgba(5,0,15,.22)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = gr; ctx.fillRect(x - r, y - r, r * 2, r * 2);
   }
-  ctx.fillStyle = 'rgba(255,255,255,.045)';
-  for (let c = 0; c < COLS; c++) for (let r = 0; r < ROWS; r++) if ((c + r) & 1) ctx.fillRect(c * CS, GY + r * CS, CS, CS);
-  ctx.lineCap = 'round'; ctx.lineWidth = 1.4;
-  for (let i = 0; i < 1500; i++) {
-    const x = rnd(i, 5, idx) * W, y = GY + rnd(i, 6, idx) * ROWS * CS, h = 3 + rnd(i, 7, idx) * 6, lean = (rnd(i, 8, idx) - .5) * 5;
-    ctx.strokeStyle = rnd(i, 9, idx) < .55 ? 'rgba(20,70,40,.22)' : 'rgba(235,255,190,.2)';
-    ctx.beginPath(); ctx.moveTo(x, y); ctx.quadraticCurveTo(x + lean * .3, y - h * .6, x + lean, y - h); ctx.stroke();
-  }
-  ctx.lineCap = 'butt';
   for (const d of L.deco) drawDeco(d);
   for (const [key, kind] of L.blocked) {
     const [c, r] = key.split(',').map(Number), x = c * CS + CS / 2, y = GY + r * CS + CS / 2;
     if (kind === 'water') {
-      ctx.fillStyle = vpaint('#4fbfe8', GY + r * CS - 30, CS + 60); rr(c * CS + 1, GY + r * CS + 1, CS - 2, CS - 2, 10); ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,.18)'; rr(c * CS + 5, GY + r * CS + 4, CS - 10, 10, 5); ctx.fill();
-      if ((c + r) % 3 === 0) { ell(x + 10, y - 12, 8, 5, '#4cbb57', 0, 2); circ(x + 13, y - 13, 2.5, '#ff8fb8', 1); }
-    } else if (kind === 'tree') {
-      ctx.fillStyle = 'rgba(20,10,30,.28)'; ctx.beginPath(); ctx.ellipse(x + 6, y + 22, 25, 8, 0, 0, 7); ctx.fill();
-      ctx.fillStyle = vpaint('#8a5a2b', y, 22); ctx.strokeStyle = INK; ctx.lineWidth = 2.5; rr(x - 5, y, 10, 22, 3); ctx.fill(); ctx.stroke();
-      circ(x - 10, y - 2, 13, '#2a7f35'); circ(x + 10, y - 2, 13, '#2a7f35'); circ(x, y - 10, 19, '#2f8f3a');
-      circ(x - 6, y - 16, 6, 'rgba(255,255,220,.22)', 0); circ(x + 8, y - 2, 3, '#e53935', 1.5);
-    } else if (kind === 'rock') {
-      ctx.fillStyle = 'rgba(20,10,30,.25)'; ctx.beginPath(); ctx.ellipse(x + 4, y + 18, 24, 7, 0, 0, 7); ctx.fill();
-      ell(x, y + 6, 22, 16, '#a3a9b5'); ell(x - 6, y, 8, 5, 'rgba(255,255,255,.35)', 0, 0); ell(x + 9, y + 14, 6, 3, '#6fbf5a', 0, 0);
-    } else if (kind === 'berrybush') {
-      drawDeco({ kind: 'berry', x, y });
+      ctx.fillStyle = INK; ctx.fillRect(c * CS, GY + r * CS, CS, CS);
+      ctx.fillStyle = vpaint('#2a4a8a', GY + r * CS - 40, CS + 80); ctx.fillRect(c * CS + 2, GY + r * CS + 2, CS - 4, CS - 4);
+      ctx.fillStyle = 'rgba(94,231,255,.12)'; ctx.fillRect(c * CS + 2, GY + r * CS + 2, CS - 4, 8);
+    } else if (kind === 'lamp') {
+      ctx.fillStyle = 'rgba(5,0,15,.4)'; ctx.beginPath(); ctx.ellipse(x + 4, y + 22, 16, 5, 0, 0, 7); ctx.fill();
+      ell(x, y + 18, 9, 4, '#2a1e3e', 0, 2);
+      ctx.fillStyle = vpaint('#3a2e52', y - 30, 50); ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(x - 3, y - 26, 6, 44, 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#d4af5a'; ctx.fillRect(x - 5, y - 6, 10, 3);
+      ctx.fillStyle = '#ffd28a'; ctx.strokeStyle = INK; ctx.lineWidth = 2.2; rr(x - 8, y - 40, 16, 15, 3); ctx.fill(); ctx.stroke();
+      tri(x - 10, y - 40, x + 10, y - 40, x, y - 48, '#2a1e3e', 2);
+    } else if (kind === 'boiler') {
+      ctx.fillStyle = 'rgba(5,0,15,.4)'; ctx.beginPath(); ctx.ellipse(x + 4, y + 20, 24, 7, 0, 0, 7); ctx.fill();
+      ell(x, y + 2, 20, 18, '#5a5468');
+      ctx.strokeStyle = '#d4af5a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.ellipse(x, y + 2, 20, 18, 0, -1.2, 1.2); ctx.stroke();
+      for (const [a, b] of [[-12, -8], [12, -8], [-14, 10], [14, 10]]) circ(x + a, y + b, 1.8, '#d4af5a', 0);
+      ctx.fillStyle = vpaint('#6a6478', y - 30, 20); ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(x + 6, y - 30, 7, 18, 2); ctx.fill(); ctx.stroke();
+      gearShape(x - 6, y + 2, 7, 8, .3, '#a8864a');
+    } else if (kind === 'chimney') {
+      ctx.fillStyle = 'rgba(5,0,15,.4)'; ctx.beginPath(); ctx.ellipse(x + 4, y + 22, 22, 6, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = vpaint('#7a3a3a', y - 24, 46); ctx.strokeStyle = INK; ctx.lineWidth = 2.5; rr(x - 13, y - 22, 26, 42, 3); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = 'rgba(20,5,10,.5)'; ctx.lineWidth = 1.2;
+      for (let yy = y - 14; yy < y + 18; yy += 8) { ctx.beginPath(); ctx.moveTo(x - 12, yy); ctx.lineTo(x + 12, yy); ctx.stroke(); }
+      ctx.fillStyle = '#2a1e2a'; ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(x - 16, y - 27, 32, 7, 2); ctx.fill(); ctx.stroke();
     }
   }
-  const oak = oakCenter(L);
-  if (oak) {
-    const { x, y } = oak;
-    ctx.fillStyle = 'rgba(20,10,30,.3)'; ctx.beginPath(); ctx.ellipse(x + 8, y + 50, 60, 14, 0, 0, 7); ctx.fill();
-    ctx.fillStyle = vpaint('#7a4a22', y - 10, 56); ctx.strokeStyle = INK; ctx.lineWidth = 3; rr(x - 14, y - 10, 28, 56, 6); ctx.fill(); ctx.stroke();
-    circ(x - 26, y - 6, 22, '#2a7f35'); circ(x + 26, y - 6, 22, '#2a7f35'); circ(x, y - 22, 46, '#2f8f3a');
-    circ(x - 16, y - 40, 12, 'rgba(255,255,220,.2)', 0);
+  const core = coreCenter(L);
+  if (core) {
+    const { x, y } = core;
+    ctx.fillStyle = 'rgba(5,0,15,.45)'; ctx.beginPath(); ctx.ellipse(x + 8, y + 52, 58, 13, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = vpaint('#3e3060', y - 30, 90); ctx.strokeStyle = INK; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(x - 22, y + 50); ctx.lineTo(x - 15, y - 18); ctx.lineTo(x + 15, y - 18); ctx.lineTo(x + 22, y + 50); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = '#d4af5a'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(x - 18, y + 20); ctx.lineTo(x + 18, y + 20); ctx.moveTo(x - 16, y - 6); ctx.lineTo(x + 16, y - 6); ctx.stroke();
+    ell(x, y - 18, 26, 8, '#53447a', 0, 3);
+    for (const a of [-1, 1]) { ctx.fillStyle = vpaint('#53447a', y - 60, 50); ctx.strokeStyle = INK; ctx.lineWidth = 2.5; rr(x + a * 22 - 3, y - 50, 6, 32, 2); ctx.fill(); ctx.stroke(); }
   }
-  // the path: drop shadow, ink, edge, dirt, then a lit upper rim and a worn middle for depth
+  // the street: drop shadow, dark kerb, brass edge, cobbles, and a faint glowing lane in the middle
   const trace = () => { ctx.beginPath(); L.pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); };
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.save(); ctx.translate(0, 7); trace(); ctx.strokeStyle = 'rgba(20,10,30,.25)'; ctx.lineWidth = 58; ctx.stroke(); ctx.restore();
+  ctx.save(); ctx.translate(0, 7); trace(); ctx.strokeStyle = 'rgba(5,0,15,.45)'; ctx.lineWidth = 58; ctx.stroke(); ctx.restore();
   trace(); ctx.strokeStyle = INK; ctx.lineWidth = 54; ctx.stroke();
-  trace(); ctx.strokeStyle = th.edge; ctx.lineWidth = 48; ctx.stroke();
-  trace(); ctx.strokeStyle = th.path; ctx.lineWidth = 40; ctx.stroke();
-  ctx.save(); ctx.translate(0, -4); trace(); ctx.strokeStyle = 'rgba(255,250,225,.4)'; ctx.lineWidth = 32; ctx.stroke(); ctx.restore();
-  ctx.save(); ctx.translate(0, 3); trace(); ctx.strokeStyle = th.path; ctx.lineWidth = 30; ctx.stroke(); ctx.restore();
-  trace(); ctx.strokeStyle = 'rgba(120,70,30,.12)'; ctx.lineWidth = 16; ctx.stroke();
+  trace(); ctx.strokeStyle = th.edge; ctx.lineWidth = 49; ctx.stroke();
+  trace(); ctx.strokeStyle = 'rgba(212,175,90,.5)'; ctx.lineWidth = 44; ctx.stroke();
+  trace(); ctx.strokeStyle = th.path; ctx.lineWidth = 41; ctx.stroke();
   ctx.lineCap = 'butt';
-  for (const p of L.pebbles) {
-    ctx.fillStyle = 'rgba(90,55,25,.4)'; ctx.beginPath(); ctx.ellipse(p.x, p.y + 1, p.r * 1.3, p.r, 0, 0, 7); ctx.fill();
-    ctx.fillStyle = 'rgba(255,245,220,.5)'; ctx.beginPath(); ctx.ellipse(p.x - .4, p.y - .6, p.r * .8, p.r * .5, 0, 0, 7); ctx.fill();
+  const o = {}, tone2 = tone(th.path);
+  for (let d = 4, i = 0; d < L.len; d += 9, i++) {
+    posAt(L, d, o);
+    const p2 = {}; posAt(L, Math.min(L.len, d + 1), p2);
+    const ax = p2.x - o.x, ay = p2.y - o.y, al = Math.hypot(ax, ay) || 1, nx = -ay / al, ny = ax / al;
+    for (const off of (i % 2 ? [-14, -4.5, 5, 14] : [-9.5, 0, 9.5])) {
+      const x = o.x + nx * off, y = o.y + ny * off, v = rnd(i, off * 7 | 0, idx);
+      ctx.fillStyle = v < .33 ? tone2[2] : v < .8 ? tone2[1] : tone2[0];
+      rr(x - 4, y - 3.5, 8, 7, 2.5); ctx.fill();
+      ctx.fillStyle = 'rgba(255,240,255,.18)'; ctx.fillRect(x - 3, y - 3, 5, 1.5);
+    }
   }
-  // key light from the top left
+  ctx.save(); ctx.globalAlpha = .5; trace(); ctx.strokeStyle = 'rgba(5,0,15,.4)'; ctx.lineWidth = 8; ctx.stroke(); ctx.restore();
+  ctx.save(); ctx.shadowColor = th.glow; ctx.shadowBlur = 10; trace(); ctx.strokeStyle = th.glow; ctx.globalAlpha = .28; ctx.lineWidth = 2.5; ctx.setLineDash([10, 14]); ctx.stroke(); ctx.restore();
+  // moonlight from the top left, deep violet shade towards the bottom right
   const lg = ctx.createLinearGradient(0, GY, W, PY);
-  lg.addColorStop(0, 'rgba(255,236,190,.16)'); lg.addColorStop(.5, 'rgba(0,0,0,0)'); lg.addColorStop(1, 'rgba(30,20,80,.18)');
+  lg.addColorStop(0, 'rgba(200,170,255,.14)'); lg.addColorStop(.5, 'rgba(0,0,0,0)'); lg.addColorStop(1, 'rgba(10,0,30,.3)');
   ctx.fillStyle = lg; ctx.fillRect(0, GY, W, ROWS * CS);
 }
 function drawGround() {
   const L = g.L;
   ctx.drawImage(LEVELS[g.lv].bg, 0, 0, W, H);
   for (const [key, kind] of L.blocked) {
-    if (kind !== 'water') continue;
     const [c, r] = key.split(',').map(Number), x = c * CS + CS / 2, y = GY + r * CS + CS / 2;
-    ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 2;
-    const w = Math.sin(T * 2 + c + r) * 3;
-    ctx.beginPath(); ctx.arc(x - 8 + w, y, 7, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
-    ctx.beginPath(); ctx.arc(x + 10 - w, y + 12, 6, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+    if (kind === 'water') {
+      ctx.strokeStyle = 'rgba(140,240,255,.55)'; ctx.lineWidth = 2;
+      const w = Math.sin(T * 2 + c + r) * 3;
+      ctx.beginPath(); ctx.arc(x - 8 + w, y, 7, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+      ctx.beginPath(); ctx.arc(x + 10 - w, y + 12, 6, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+    } else if (kind === 'boiler' || kind === 'chimney') {
+      // steam and smoke puffs drifting up
+      for (let i = 0; i < 3; i++) {
+        const k = (T * .5 + i / 3 + c * .17) % 1, sx = x + (kind === 'boiler' ? 9 : 0) + Math.sin(T + i) * 4, sy = y - (kind === 'boiler' ? 32 : 28) - k * 40;
+        ctx.fillStyle = kind === 'boiler' ? 'rgba(200,255,220,' + (.22 * (1 - k)).toFixed(3) + ')' : 'rgba(120,100,140,' + (.35 * (1 - k)).toFixed(3) + ')';
+        ctx.beginPath(); ctx.arc(sx, sy, 5 + k * 9, 0, 7); ctx.fill();
+      }
+    }
   }
-  const oak = oakCenter(L);
-  if (oak) {
-    const { x, y } = oak;
-    ctx.save(); ctx.shadowColor = '#ffd23b'; ctx.shadowBlur = 16 + Math.sin(T * 3) * 6;
-    tri(x - 8, y + 34, x + 8, y + 34, x, y + 58, '#ffd23b'); ctx.restore();
-    ell(x - 3, y + 28, 3, 7, '#4cbb57', -.5, 2); ell(x + 3, y + 28, 3, 7, '#4cbb57', .5, 2);
+  const core = coreCenter(L);
+  if (core) {
+    const { x, y } = core, b = Math.sin(T * 2) * 4;
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    const gr = ctx.createRadialGradient(x, y - 40, 0, x, y - 40, 110);
+    gr.addColorStop(0, 'rgba(199,125,255,.5)'); gr.addColorStop(1, 'rgba(199,125,255,0)');
+    ctx.fillStyle = gr; ctx.fillRect(x - 110, y - 150, 220, 220); ctx.restore();
+    crystalIcon(x, y - 46 + b, 2.1, Math.sin(T * .7) * .08, '#c77dff');
   }
-  // carrot store at the end of the path
+  // the crystal store at the end of the street
   const ex = L.exit.x, ey = L.exit.y;
-  ell(ex, ey + 8, 20, 11, '#5a3a1a');
+  ell(ex, ey + 9, 19, 8, '#2a1e3e', 0, 2.5);
   const n = Math.min(3, Math.ceil(g.lives / (BAL.lives / 3)));
-  if (n >= 1) carrotIcon(ex, ey - 6, .85, 0);
-  if (n >= 2) carrotIcon(ex - 9, ey - 2, .8, -.4);
-  if (n >= 3) carrotIcon(ex + 9, ey - 2, .8, .4);
+  if (n >= 1) crystalIcon(ex, ey - 6, .85, 0);
+  if (n >= 2) crystalIcon(ex - 9, ey - 2, .7, -.4);
+  if (n >= 3) crystalIcon(ex + 9, ey - 2, .7, .4);
 }
 function drawAmbient() {
-  // drifting cloud shadows
-  ctx.fillStyle = 'rgba(20,10,40,.07)';
-  for (let i = 0; i < 2; i++) {
-    const x = ((T * 14 + i * 420) % 900) - 180, y = GY + 180 + i * 380;
-    ctx.beginPath(); ctx.ellipse(x, y, 130, 60, 0, 0, 7); ctx.ellipse(x + 80, y + 20, 90, 45, 0, 0, 7); ctx.fill();
-  }
   ctx.save();
-  // colour grade: warm highlights, violet-teal shadows, like a painted film frame
+  // colour grade: violet highlights, near-black shade, like a painted night frame
   ctx.globalCompositeOperation = 'soft-light';
   const lg = ctx.createLinearGradient(0, GY, W * .6, PY);
-  lg.addColorStop(0, 'rgba(255,200,120,.55)'); lg.addColorStop(1, 'rgba(40,70,150,.5)');
+  lg.addColorStop(0, 'rgba(210,150,255,.5)'); lg.addColorStop(1, 'rgba(10,0,40,.6)');
   ctx.fillStyle = lg; ctx.fillRect(0, GY, W, ROWS * CS);
-  // light shafts and floating dust
+  // lamp and canal glow, then sparks rising from the street
   ctx.globalCompositeOperation = 'lighter';
-  for (let i = 0; i < 3; i++) {
-    const a = .035 + Math.sin(T * .4 + i * 2) * .02, x0 = 60 + i * 170 + Math.sin(T * .2 + i) * 20;
-    ctx.fillStyle = 'rgba(255,236,190,' + a.toFixed(3) + ')';
-    ctx.beginPath(); ctx.moveTo(x0, GY); ctx.lineTo(x0 + 60, GY); ctx.lineTo(x0 + 260, PY); ctx.lineTo(x0 + 150, PY); ctx.closePath(); ctx.fill();
+  for (const l of lightsOf(g.L)) {
+    const f = .85 + Math.sin(T * 5 + l.x) * .08, gr = ctx.createRadialGradient(l.x, l.y, 0, l.x, l.y, l.r * f);
+    gr.addColorStop(0, l.warm ? 'rgba(255,170,90,.38)' : 'rgba(94,231,255,.16)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gr; ctx.fillRect(l.x - l.r, l.y - l.r, l.r * 2, l.r * 2);
   }
-  for (let i = 0; i < 22; i++) {
-    const sp = 6 + rnd(i, 3, 7) * 10;
-    const x = (rnd(i, 1, 7) * W + T * sp) % W, y = GY + ((rnd(i, 2, 7) * ROWS * CS - T * sp * .7) % (ROWS * CS) + ROWS * CS) % (ROWS * CS);
-    ctx.fillStyle = 'rgba(255,240,200,' + (.25 + Math.sin(T * 2 + i) * .2).toFixed(3) + ')';
-    ctx.beginPath(); ctx.arc(x, y, 1.2 + rnd(i, 4, 7) * 1.6, 0, 7); ctx.fill();
+  const glow = g.theme.glow;
+  for (let i = 0; i < 24; i++) {
+    const sp = 8 + rnd(i, 3, 7) * 14, k = ((rnd(i, 2, 7) * 600 + T * sp) % (ROWS * CS)) / (ROWS * CS);
+    const x = (rnd(i, 1, 7) * W + Math.sin(T + i) * 12), y = PY - k * ROWS * CS;
+    ctx.globalAlpha = Math.sin(k * Math.PI) * (.5 + Math.sin(T * 3 + i) * .3);
+    ctx.fillStyle = i % 3 ? glow : '#e6d2ff';
+    ctx.beginPath(); ctx.arc(x, y, 1 + rnd(i, 4, 7) * 1.8, 0, 7); ctx.fill();
   }
   ctx.restore();
-  const vg = ctx.createRadialGradient(W / 2, GY + ROWS * CS / 2, 240, W / 2, GY + ROWS * CS / 2, 620);
-  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(20,5,40,.32)');
+  // drifting mist
+  ctx.fillStyle = 'rgba(150,110,210,.06)';
+  for (let i = 0; i < 2; i++) {
+    const x = ((T * 10 + i * 420) % 900) - 180, y = GY + 240 + i * 360;
+    ctx.beginPath(); ctx.ellipse(x, y, 160, 40, 0, 0, 7); ctx.ellipse(x + 90, y + 18, 110, 30, 0, 0, 7); ctx.fill();
+  }
+  const vg = ctx.createRadialGradient(W / 2, GY + ROWS * CS / 2, 220, W / 2, GY + ROWS * CS / 2, 600);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(8,0,20,.55)');
   ctx.fillStyle = vg; ctx.fillRect(0, GY, W, ROWS * CS);
 }
 
 // ---------- scenes ----------
+// night sky over the city: moon, stars, an airship and a skyline with lit windows
 function drawSky() {
   const gr = ctx.createLinearGradient(0, 0, 0, H);
-  gr.addColorStop(0, '#5ec8ff'); gr.addColorStop(.3, '#c8f0ff'); gr.addColorStop(.31, '#7ed957'); gr.addColorStop(1, '#4fae37');
+  gr.addColorStop(0, '#07040f'); gr.addColorStop(.18, '#1e0f36'); gr.addColorStop(.3, '#4a2066'); gr.addColorStop(.31, '#1a1028'); gr.addColorStop(1, '#0c0716');
   ctx.fillStyle = gr; ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = '#6cc94a'; ctx.beginPath(); ctx.ellipse(110, 312, 220, 40, 0, 0, 7); ctx.ellipse(430, 318, 220, 46, 0, 0, 7); ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,.85)';
-  for (let i = 0; i < 3; i++) {
-    const x = ((T * 8 + i * 220) % 760) - 110, y = 40 + i * 70;
-    ctx.beginPath(); ctx.arc(x, y, 18, 0, 7); ctx.arc(x + 20, y - 8, 22, 0, 7); ctx.arc(x + 42, y, 16, 0, 7); ctx.fill();
+  for (let i = 0; i < 40; i++) {
+    ctx.globalAlpha = .4 + Math.sin(T * 2 + i * 3) * .3; ctx.fillStyle = '#efe6ff';
+    ctx.beginPath(); ctx.arc(rnd(i, 1, 9) * W, rnd(i, 2, 9) * 240, .8 + rnd(i, 3, 9) * 1.3, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.save(); ctx.shadowColor = '#e6d2ff'; ctx.shadowBlur = 40; circ(420, 70, 34, '#f1e8ff', 0); ctx.restore();
+  ctx.fillStyle = 'rgba(180,160,220,.35)'; ctx.beginPath(); ctx.arc(410, 62, 7, 0, 7); ctx.arc(432, 80, 5, 0, 7); ctx.fill();
+  const zx = ((T * 9) % 760) - 110, zy = 120 + Math.sin(T * .8) * 6;
+  ell(zx, zy, 34, 12, '#4a2f86', 0, 2.5); ctx.fillStyle = '#d4af5a'; ctx.fillRect(zx - 12, zy + 11, 24, 6); glowDot(zx + 8, zy + 14, 2, '#ffb35c', 8);
+  // two rows of rooftops, the back row fainter
+  for (const [row, base, col] of [[0, 300, '#1c1030'], [1, 316, '#120a20']]) {
+    ctx.fillStyle = col;
+    for (let i = 0; i < 12; i++) {
+      const bw = 40 + rnd(i, row, 4) * 40, bx = i * 50 - 20 + row * 25, bh = 40 + rnd(i, row + 5, 4) * 70;
+      ctx.fillRect(bx, base - bh, bw, bh + 30);
+      if (rnd(i, row + 9, 4) < .4) ctx.fillRect(bx + bw * .3, base - bh - 18, 8, 18);
+      for (let w = 0; w < 6; w++) if (rnd(i, w, row + 20) < .35) {
+        ctx.fillStyle = rnd(i, w, row + 30) < .6 ? 'rgba(255,190,110,.75)' : 'rgba(199,125,255,.7)';
+        ctx.fillRect(bx + 6 + (w % 3) * 11, base - bh + 10 + Math.floor(w / 3) * 14, 5, 7);
+        ctx.fillStyle = col;
+      }
+    }
   }
 }
 function drawStory() {
   drawSky();
   card(24, 40, 492, 880, '#fff3d6', 22);
   txt('BERÄTTELSEN', W / 2, 82, 32, '#ff9b21');
-  drawRabbit(0, 170, 180 - Math.abs(Math.sin(T * 3)) * 8, 0, 0, 1, 1.7);
+  drawTower(0, 170, 180 - Math.abs(Math.sin(T * 3)) * 8, 0, 0, 1, 1.7);
   drawHero('linnea', 262, 190, -.3, 1.6, { lift: Math.abs(Math.sin(T * 2.4)) * 6, blink: (T % 3) < .13 });
   drawBossBalloon(390 + Math.sin(T) * 6, 175 + Math.cos(T * .8) * 5, BOSSES.rufus, {}, false, 1.25);
   let y = 270;
   for (const p of STORY) y = para(p, 50, y, 440, 16) + 10;
-  btn(120, 830, 300, 66, 'TILL SKOGEN!', '#3fbf5a', () => { save.story = true; persist(); scene = 'menu'; }, { size: 24 });
+  btn(120, 830, 300, 66, 'TILL STADEN!', '#3fbf5a', () => { save.story = true; persist(); scene = 'menu'; }, { size: 24 });
 }
 function placeIcon(i, x, y, un) {
-  circ(x, y, 34, un ? THEMES[i].grass : '#9aa3b5', 3.5);
+  circ(x, y, 34, un ? THEMES[i].ground : '#4a4060', 3.5);
   ctx.save(); ctx.beginPath(); ctx.arc(x, y, 32, 0, 7); ctx.clip();
   if (!un) ctx.globalAlpha = .4;
-  if (i === 0) { ctx.fillStyle = '#8a5a2b'; ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(x - 4, y + 2, 8, 16, 2); ctx.fill(); ctx.stroke(); circ(x, y - 6, 16, '#2f8f3a', 2.5); drawDeco({ kind: 'flower', x: x - 18, y: y + 14, col: '#fff' }); drawDeco({ kind: 'flower', x: x + 17, y: y + 16, col: '#ffe14d' }); }
-  else if (i === 1) { ell(x, y + 6, 24, 13, '#5ec8f0', 0, 2.5); ell(x + 9, y + 4, 7, 4, '#4cbb57', 0, 1.5); drawDeco({ kind: 'reed', x: x - 18, y: y - 6 }); }
-  else if (i === 2) { ctx.translate(x, y + 4); ctx.scale(2, 2); drawDeco({ kind: 'mush', x: 0, y: 0 }); }
-  else if (i === 3) { ell(x, y + 18, 34, 14, '#a3a9b5', 0, 2); ctx.translate(x, y); ctx.scale(1.4, 1.4); drawDeco({ kind: 'berry', x: 0, y: 0 }); }
-  else { ctx.fillStyle = '#7a4a22'; ctx.strokeStyle = INK; ctx.lineWidth = 2; rr(x - 5, y, 10, 20, 2); ctx.fill(); ctx.stroke(); circ(x, y - 8, 18, '#2f8f3a', 2.5); tri(x - 4, y + 14, x + 4, y + 14, x, y + 24, '#ffd23b', 1.5); }
+  if (i === 0) { ctx.translate(x, y + 16); ctx.scale(2, 2); drawDeco({ kind: 'lamp', x: 0, y: 0 }); }
+  else if (i === 1) { ctx.fillStyle = vpaint('#2a4a8a', y - 10, 40); ctx.fillRect(x - 34, y + 2, 68, 30); ctx.strokeStyle = 'rgba(140,240,255,.7)'; ctx.lineWidth = 2; for (const k of [-12, 8]) { ctx.beginPath(); ctx.arc(x + k, y + 16, 7, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke(); } drawDeco({ kind: 'barrel', x: x, y: y - 8 }); }
+  else if (i === 2) { gearShape(x - 6, y + 4, 14, 10, T * .5, '#a8864a'); gearShape(x + 13, y - 10, 9, 8, -T * .8, '#d4af5a'); }
+  else if (i === 3) { ctx.fillStyle = '#4a3458'; ctx.beginPath(); ctx.moveTo(x - 34, y + 20); ctx.lineTo(x - 8, y - 6); ctx.lineTo(x + 18, y + 20); ctx.fill(); ctx.translate(x + 12, y + 4); ctx.scale(1.4, 1.4); drawDeco({ kind: 'chimney', x: 0, y: 0 }); }
+  else crystalIcon(x, y + 2, 1.5, 0, '#c77dff');
   ctx.restore();
   ctx.strokeStyle = INK; ctx.lineWidth = 3.5; ctx.beginPath(); ctx.arc(x, y, 34, 0, 7); ctx.stroke();
   if (!un) {
@@ -1657,17 +1799,19 @@ function placeIcon(i, x, y, un) {
 }
 function drawMenu() {
   drawSky();
-  drawRabbit(0, 66, 154, -.3, 0, 1, 1.1, { lift: Math.abs(Math.sin(T * 2.6)) * 10, sx: 1, sy: 1, ear: Math.sin(T * 3) * .1, blink: (T % 3.3) < .15 });
+  drawTower(0, 66, 154, -.3, 0, 1, 1.1, { lift: Math.abs(Math.sin(T * 2.6)) * 10, sx: 1, sy: 1, ear: Math.sin(T * 3) * .1, blink: (T % 3.3) < .15 });
   drawHero('linnea', 474, 158, Math.PI + .3, 1.25, { lift: Math.abs(Math.sin(T * 2.2)) * 6, blink: ((T + 1.2) % 3.7) < .13 });
-  txt('KANIN', W / 2, 110 + Math.sin(T * 2) * 3, 60, '#ffd93b');
-  txt('VÄKTARNA', W / 2, 164 + Math.sin(T * 2 + .5) * 3, 46, '#ff7ad9');
+  ctx.save(); ctx.shadowColor = '#c77dff'; ctx.shadowBlur = 24;
+  txt('KRISTALL', W / 2, 110 + Math.sin(T * 2) * 3, 54, '#ffd36b');
+  txt('VÄKTARNA', W / 2, 164 + Math.sin(T * 2 + .5) * 3, 46, '#d2a8ff');
+  ctx.restore();
   txt('★ ' + totalStars() + ' / ' + LEVELS.length * 3, W / 2, 206, 22, '#ffd93b');
   txt(MENU_JOKES[Math.floor(T / 5) % MENU_JOKES.length], W / 2, 236, 14, '#3b6a2a', 'center', null);
   // trail between the places
   ctx.save(); ctx.lineCap = 'round'; ctx.setLineDash([1, 16]);
   ctx.beginPath(); ctx.moveTo(MAP[0][0], MAP[0][1]);
   for (let i = 1; i < MAP.length; i++) { const [a, b] = MAP[i - 1], [c, d] = MAP[i]; ctx.quadraticCurveTo((a + c) / 2 + (i % 2 ? 60 : -60), (b + d) / 2, c, d); }
-  ctx.strokeStyle = INK; ctx.lineWidth = 11; ctx.stroke(); ctx.strokeStyle = '#fff3d6'; ctx.lineWidth = 6; ctx.stroke();
+  ctx.strokeStyle = INK; ctx.lineWidth = 11; ctx.stroke(); ctx.shadowColor = '#c77dff'; ctx.shadowBlur = 10; ctx.strokeStyle = '#d2a8ff'; ctx.lineWidth = 6; ctx.stroke();
   ctx.restore();
   let here = 0;
   LEVELS.forEach((_, i) => { if (levelUnlocked(i)) here = i; });
@@ -1686,7 +1830,7 @@ function drawMenu() {
     if (run) txt('▶ FORTSÄTT VÅG ' + (run.wave + 1), x, y + 67, 11, '#2f7d32', 'center', null);
     else for (let s = 0; s < 3; s++) txt('★', x - 18 + s * 18, y + 67, 16, s < save.stars[i] ? '#ffd23b' : '#d9cdb0', 'center', un ? INK : '#9aa3b5');
     if (un) drawPredator(BOSSES[l.bosses[l.waves]].animal, x + 34, y - 28, .5);
-    if (i === here) drawRabbit(0, x - 42, y - 30 - Math.abs(Math.sin(T * 5)) * 8, 0, 0, 1, .6);
+    if (i === here) drawTower(0, x - 42, y - 30 - Math.abs(Math.sin(T * 5)) * 8, 0, 0, 1, .6);
   });
   card(20, 676, 500, 158, 'rgba(255,243,214,.96)');
   txt('HJÄLTAR', 98, 694, 14, INK, 'center', null);
@@ -1697,11 +1841,11 @@ function drawMenu() {
     ctx.restore();
     txt(un ? HEROES[key].name : '???', x, 798, 10, un ? HEROES[key].color : '#7a7f94', 'center', null);
   });
-  ctx.strokeStyle = 'rgba(59,36,16,.25)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(182, 688); ctx.lineTo(182, 822); ctx.stroke();
-  txt('KANINVÄKTARE', 350, 694, 14, INK, 'center', null);
-  RABBITS.forEach((R, i) => {
-    const x = 250 + (i % 3) * 100, y = i < 3 ? 728 : 792, un = rabbitUnlocked(i);
-    drawRabbit(i, x, y, -.5, 0, un ? 1 : .3, .6, un ? { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 3 + i) * .08, blink: ((T + i * .7) % 4) < .15 } : null);
+  ctx.strokeStyle = 'rgba(212,175,90,.35)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(182, 688); ctx.lineTo(182, 822); ctx.stroke();
+  txt('TORN', 350, 694, 14, INK, 'center', null);
+  TOWERS.forEach((R, i) => {
+    const x = 250 + (i % 3) * 100, y = i < 3 ? 728 : 792, un = towerUnlocked(i);
+    drawTower(i, x, y, -.5, 0, un ? 1 : .3, .6, un ? { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 3 + i) * .08, blink: ((T + i * .7) % 4) < .15 } : null);
     txt(un ? R.short : 'SLÅ ' + BOSSES[R.unlockBy].short, x, y + 26, 9, un ? INK : '#7a7f94', 'center', null);
   });
   const row = [
@@ -1709,7 +1853,7 @@ function drawMenu() {
     [save.muted ? 'LJUD: AV' : 'LJUD: PÅ', '#4d8dff', () => { save.muted = !save.muted; persist(); }],
     [save.auto ? 'AUTOSTART\nPÅ' : 'AUTOSTART\nAV', save.auto ? '#7d8cff' : '#8a8f9c', () => { save.auto = !save.auto; persist(); }],
     ['NOLLSTÄLL', '#ff5a5a', () => {
-      if (confirm('Radera all progress?')) { save.stars = [0, 0, 0, 0, 0]; save.seen = {}; save.rabbits = [0, 1]; save.run = null; persist(); }
+      if (confirm('Radera all progress?')) { save.stars = [0, 0, 0, 0, 0]; save.seen = {}; save.TOWERS = [0, 1]; save.run = null; persist(); }
     }],
   ];
   row.forEach(([label, col, fn], i) => btn(20 + i * 127, 846, 119, 56, label, col, fn, { size: 13 }));
@@ -1723,7 +1867,7 @@ function drawMenuAsk() {
   card(50, 280, 440, 380, '#fff3d6', 22);
   btns.push({ x: 50, y: 280, w: 440, h: 380, fn: null });
   txt(LEVELS[lv].name, W / 2, 326, 26, '#ff9b21');
-  txt('Du har ett sparat spel på våg ' + (run.wave + 1) + ' med ' + run.lives + ' morötter.', W / 2, 364, 13, '#8a6a3a', 'center', null);
+  txt('Du har ett sparat spel på våg ' + (run.wave + 1) + ' med ' + run.lives + ' kristaller.', W / 2, 364, 13, '#8a6a3a', 'center', null);
   btn(100, 396, 340, 66, 'FORTSÄTT VÅG ' + (run.wave + 1), '#3fbf5a', () => { menuAsk = null; startLevel(lv, run); }, { size: 21 });
   btn(100, 476, 340, 66, 'BÖRJA OM', '#ff9b21', () => { menuAsk = null; startLevel(lv); }, { size: 21 });
   btn(100, 568, 340, 60, 'AVBRYT', '#8a8f9c', () => { menuAsk = null; }, { size: 18 });
@@ -1736,9 +1880,9 @@ function drawPlay() {
   const ghost = g.moving ? g.moving.type : g.armed, hg = g.heroMove && g.hero;
   if (g.hover && (ghost >= 0 || hg) && !g.result) {
     const { c, r } = g.hover, x = c * CS + CS / 2, y = GY + r * CS + CS / 2;
-    const ok = canBuild(c, r), range = hg ? g.hero.s.range : g.moving ? g.moving.s.range : RABBITS[ghost].base.range;
+    const ok = canBuild(c, r), range = hg ? g.hero.s.range : g.moving ? g.moving.s.range : TOWERS[ghost].base.range;
     ctx.fillStyle = ok ? 'rgba(255,255,255,.25)' : 'rgba(255,60,60,.35)'; ctx.fillRect(c * CS, GY + r * CS, CS, CS);
-    if (ok) { if (range) drawRange(x, y, range); if (hg) drawHero(g.hero.key, x, y, 0, 1, {}); else drawRabbit(ghost, x, y, 0, 0, .7); }
+    if (ok) { if (range) drawRange(x, y, range); if (hg) drawHero(g.hero.key, x, y, 0, 1, {}); else drawTower(ghost, x, y, 0, 0, .7); }
   }
   if (g.sel && g.sel.s.range) drawRange(g.sel.x, g.sel.y, g.sel.s.range);
   const h = g.hero;
@@ -1761,7 +1905,7 @@ function drawPlay() {
     const lift = t.hop > 0 ? Math.sin(Math.min(1, 1 - (t.hop - .1) / .5) * Math.PI) * 14 : 0;
     const k = t.kick > 0 ? t.kick / .12 : 0, bob = Math.sin(T * 2.4 + t.seed) * .03;
     const moving = t === g.moving;
-    drawRabbit(t.type, t.x, t.y, t.ang, t.lvl, moving ? .45 + Math.sin(T * 8) * .15 : 1, 1, { lift: Math.max(0, lift), sx: 1 + k * .08 - bob * .5, sy: 1 - k * .1 + bob, ear: Math.sin(T * 3 + t.seed) * .07, blink: ((T + t.seed) % 4) < .14 });
+    drawTower(t.type, t.x, t.y, t.ang, t.lvl, moving ? .45 + Math.sin(T * 8) * .15 : 1, 1, { lift: Math.max(0, lift), sx: 1 + k * .08 - bob * .5, sy: 1 - k * .1 + bob, ear: Math.sin(T * 3 + t.seed) * .07, blink: ((T + t.seed) % 4) < .14 });
     if (t.rangeUp) { ctx.fillStyle = '#4d8dff'; ctx.strokeStyle = INK; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(t.x + 20, t.y - 24, 5, 0, 7); ctx.fill(); ctx.stroke(); }
     if (t === g.sel) { ctx.strokeStyle = '#ffd23b'; ctx.lineWidth = 3; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.ellipse(t.x, t.y + 22, 26, 9, 0, 0, 7); ctx.stroke(); ctx.setLineDash([]); }
   }
@@ -1808,7 +1952,7 @@ function drawPlay() {
   }
   for (const p of g.parts) {
     ctx.globalAlpha = Math.max(0, p.life / p.max);
-    if (p.carrot) carrotIcon(p.x, p.y, .6, p.rot);
+    if (p.carrot) crystalIcon(p.x, p.y, .6, p.rot);
     else if (p.heart) heart(p.x, p.y, .6, p.color, 1);
     else {
       ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
@@ -1823,7 +1967,7 @@ function drawPlay() {
     else txt(p.text, p.x, p.y, p.size, p.color);
   }
   ctx.globalAlpha = 1;
-  if (g.wave === 0 && !g.towers.length && !g.result) txt('TRYCK PÅ GRÄSET FÖR ATT PLACERA EN KANIN', W / 2, PY - 24, 15, '#fff');
+  if (g.wave === 0 && !g.towers.length && !g.result) txt('TRYCK PÅ EN LEDIG PLATTA FÖR ATT BYGGA ETT TORN', W / 2, PY - 24, 15, '#fff');
   ctx.restore();
   drawBubbles(); drawBanner(); drawAnnouncer();
   drawTopInfo(); drawDialog(); drawHud(); drawPanel();
@@ -1839,7 +1983,7 @@ function drawBubbles() {
     const w = ctx.measureText(b.text).width + 18, h = 26, ax = b.obj.x, ay = b.obj.y - b.dy;
     const x = Math.max(4, Math.min(W - w - 4, ax - w / 2)), y = Math.max(GY + 4, ay - h);
     const tx = Math.max(x + 12, Math.min(x + w - 12, ax));
-    ctx.fillStyle = '#fff'; ctx.strokeStyle = INK; ctx.lineWidth = 2.5;
+    ctx.fillStyle = '#2a1c44'; ctx.strokeStyle = '#c77dff'; ctx.lineWidth = 2.5;
     rr(x, y, w, h, 12); ctx.fill(); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(tx - 6, y + h - 1); ctx.lineTo(tx, y + h + 8); ctx.lineTo(tx + 6, y + h - 1); ctx.closePath(); ctx.fill(); ctx.stroke();
     ctx.fillRect(tx - 5, y + h - 4, 10, 4);
@@ -1873,10 +2017,10 @@ function drawAnnouncer() {
   ctx.restore();
 }
 function portrait(who, x, y, r) {
-  ctx.save(); circ(x, y, r, '#fff3d6', 2.5);
+  ctx.save(); circ(x, y, r, '#3a2a5a', 2.5);
   ctx.beginPath(); ctx.arc(x, y, r - 1.5, 0, 7); ctx.clip();
   if (who === 'hero') drawHero(g.hero ? g.hero.key : 'linnea', x, y + r * .55, .3, r / 22, { blink: (T % 3) < .12 });
-  else if (who === 'guard') drawRabbit(GUARDS[g.lv].type, x, y + r * .35, .3, 0, 1, r / 26, { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 3) * .08, blink: (T % 3.4) < .12 });
+  else if (who === 'guard') drawPerson(LOOKS[GUARDS[g.lv].look], x, y + r * .55, .3, r / 22, { blink: (T % 3.4) < .12 });
   else drawPredator(BOSSES[who].animal, x, y + r * .15, r / 24);
   ctx.restore();
   ctx.strokeStyle = INK; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke();
@@ -1930,15 +2074,17 @@ function drawTopInfo() {
   }
 }
 function woodBar(y, h) {
-  ctx.fillStyle = '#8a5a2b'; ctx.fillRect(0, y, W, h);
-  ctx.strokeStyle = 'rgba(59,36,16,.25)'; ctx.lineWidth = 2;
-  for (let i = 1; i < 4; i++) { const yy = y + h * i / 4; ctx.beginPath(); ctx.moveTo(0, yy); ctx.bezierCurveTo(W * .3, yy - 4, W * .6, yy + 4, W, yy); ctx.stroke(); }
-  ctx.fillStyle = 'rgba(255,255,255,.14)'; ctx.fillRect(0, y, W, 5);
+  // dark iron bar with a gold rim, like the frame of an arena interface
+  const gr = ctx.createLinearGradient(0, y, 0, y + h);
+  gr.addColorStop(0, '#2a1c44'); gr.addColorStop(1, '#120a20');
+  ctx.fillStyle = gr; ctx.fillRect(0, y, W, h);
+  ctx.fillStyle = 'rgba(200,160,255,.07)'; ctx.fillRect(0, y, W, 5);
   ctx.fillStyle = INK; ctx.fillRect(0, y === 0 ? h - 3 : y, W, 3);
+  ctx.fillStyle = '#d4af5a'; ctx.fillRect(0, y === 0 ? h - 4 : y + 3, W, 1.5);
 }
 function drawHud() {
   woodBar(0, GY);
-  carrotIcon(16, 30, 1, Math.sin(T * 2) * .1);
+  crystalIcon(16, 30, 1, Math.sin(T * 2) * .1);
   txt(String(g.lives), 30, 30, 22, g.lives <= 5 ? '#ff8a8a' : '#fff', 'left');
   coin(84, 30); txt(String(Math.floor(g.gold)), 98, 30, g.gold >= 10000 ? 17 : 22, '#ffe58a', 'left');
   const nb = nextBoss();
@@ -1962,7 +2108,7 @@ function drawPanel() {
   if (g.moving || g.heroMove) {
     const t = g.moving || g.hero;
     if (t.hero) drawHero(t.key, 36, PY + 56, -.5, .95, { lift: Math.abs(Math.sin(T * 6)) * 6 });
-    else drawRabbit(t.type, 38, PY + 58, -.5, t.lvl, 1, 1, { lift: Math.abs(Math.sin(T * 6)) * 6, sx: 1, sy: 1, ear: 0, blink: false });
+    else drawTower(t.type, 38, PY + 58, -.5, t.lvl, 1, 1, { lift: Math.abs(Math.sin(T * 6)) * 6, sx: 1, sy: 1, ear: 0, blink: false });
     txt('FLYTTA ' + t.name.toUpperCase(), 76, PY + 40, 17, '#fff', 'left');
     txt(t.hero ? 'Tryck på en ledig ruta. Gratis!' : 'Tryck på en ledig ruta. ¢ ' + moveCost(t), 76, PY + 70, 13, '#f3dcb5', 'left', null);
     btn(330, PY + 22, 110, 76, 'AVBRYT', '#ff5a5a', () => { g.moving = null; g.heroMove = false; }, { size: 17 });
@@ -1970,8 +2116,8 @@ function drawPanel() {
   }
   if (g.sel && g.sel.hero) { drawHeroPanel(g.sel); return; }
   if (g.sel) {
-    const t = g.sel, R = RABBITS[t.type], next = R.ups[t.lvl - 1], sell = Math.floor(t.invested * .7), mc = moveCost(t), rc = rangeCost(t);
-    drawRabbit(t.type, 28, PY + 58, -0.5, t.lvl, 1, .8, { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 3) * .08, blink: (T % 3) < .14 });
+    const t = g.sel, R = TOWERS[t.type], next = R.ups[t.lvl - 1], sell = Math.floor(t.invested * .7), mc = moveCost(t), rc = rangeCost(t);
+    drawTower(t.type, 28, PY + 58, -0.5, t.lvl, 1, .8, { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 3) * .08, blink: (T % 3) < .14 });
     txt(t.name, 54, PY + 18, 15, '#fff', 'left');
     txt(R.short.toLowerCase() + ' · ' + t.pops + ' poppade', 54, PY + 37, 11, '#f3dcb5', 'left', null);
     if (next) para('Nästa: ' + next.desc, 54, PY + 54, 124, 11, '#ffe58a');
@@ -2000,8 +2146,8 @@ function drawPanel() {
     }, { size: 13 });
     return;
   }
-  RABBITS.forEach((R, i) => {
-    const x = 4 + i * 74, un = rabbitUnlocked(i), can = g.gold >= R.cost, n = countOf(i), full = n >= R.max;
+  TOWERS.forEach((R, i) => {
+    const x = 4 + i * 74, un = towerUnlocked(i), can = g.gold >= R.cost, n = countOf(i), full = n >= R.max;
     btns.push({ x, y: PY + 8, w: 70, h: 106, fn: () => {
       if (!un) { sfx(150, .12, 'sawtooth'); return; }
       g.armed = g.armed === i ? -1 : i; g.sel = null; sfx(440, .05);
@@ -2009,7 +2155,7 @@ function drawPanel() {
     card(x, PY + 8, 70, 104, !un ? '#c5cad6' : full ? '#e3d6bd' : '#fff3d6', 12);
     if (g.armed === i) { ctx.strokeStyle = '#3fbf5a'; ctx.lineWidth = 5; rr(x - 1, PY + 7, 72, 106, 13); ctx.stroke(); }
     const sel = g.armed === i;
-    drawRabbit(i, x + 35, PY + 46, -0.5, 0, un ? (full ? .55 : 1) : .3, .72, un ? { lift: sel ? Math.abs(Math.sin(T * 6)) * 5 : 0, sx: 1, sy: 1, ear: 0, blink: ((T + i) % 5) < .14 } : null);
+    drawTower(i, x + 35, PY + 46, -0.5, 0, un ? (full ? .55 : 1) : .3, .72, un ? { lift: sel ? Math.abs(Math.sin(T * 6)) * 5 : 0, sx: 1, sy: 1, ear: 0, blink: ((T + i) % 5) < .14 } : null);
     if (un) {
       txt(R.short, x + 35, PY + 80, 11, INK, 'center', null);
       if (full) txt('FULLT ' + n + '/' + R.max, x + 35, PY + 99, 11, '#a0522d', 'center', null);
@@ -2062,12 +2208,12 @@ function drawHeroPanel(h) {
     }, { size: 10, dim: !own && g.gold < it.cost });
   });
 }
-function rabbitRow(list, y) {
+function towerRow(list, y) {
   const n = list.length, sp = 96;
   list.forEach((i, k) => {
-    const x = W / 2 + (k - (n - 1) / 2) * sp, un = rabbitUnlocked(i);
-    drawRabbit(i, x, y, -.5, 0, un ? 1 : .35, .9, un ? { lift: Math.abs(Math.sin(T * 3 + k)) * 5, sx: 1, sy: 1, ear: 0, blink: false } : null);
-    txt(RABBITS[i].short, x, y + 40, 13, un ? INK : '#7a7f94', 'center', null);
+    const x = W / 2 + (k - (n - 1) / 2) * sp, un = towerUnlocked(i);
+    drawTower(i, x, y, -.5, 0, un ? 1 : .35, .9, un ? { lift: Math.abs(Math.sin(T * 3 + k)) * 5, sx: 1, sy: 1, ear: 0, blink: false } : null);
+    txt(TOWERS[i].short, x, y + 40, 13, un ? INK : '#7a7f94', 'center', null);
     if (!un) txt('låses upp snart', x, y + 56, 11, '#7a7f94', 'center', null);
   });
 }
@@ -2090,15 +2236,15 @@ function drawModal(m) {
       txt('VÅG ' + w, x, y + 84, 12, INK, 'center', null);
       const u = def.unlocks && def.unlocks[w];
       if (u != null) {
-        drawRabbit(u, x, y + 118, -.5, 0, rabbitUnlocked(u) ? .5 : 1, .55, { lift: Math.abs(Math.sin(T * 4 + k)) * 4, sx: 1, sy: 1, ear: 0, blink: false });
-        txt('+' + RABBITS[u].short, x, y + 144, 11, '#2f9e44', 'center', null);
+        drawTower(u, x, y + 118, -.5, 0, towerUnlocked(u) ? .5 : 1, .55, { lift: Math.abs(Math.sin(T * 4 + k)) * 4, sx: 1, sy: 1, ear: 0, blink: false });
+        txt('+' + TOWERS[u].short, x, y + 144, 11, '#2f9e44', 'center', null);
       }
     });
     y += def.unlocks ? 166 : 104;
-    if (def.unlocks) { y = para('Besegra bossarna så hoppar nya kaniner in och hjälper dig!', W / 2, y, 400, 13, '#2f9e44', 'center') + 10; }
+    if (def.unlocks) { y = para('Besegra bossarna så får du ritningar till nya torn!', W / 2, y, 400, 13, '#2f9e44', 'center') + 10; }
     drawBossBalloon(110, y + 60 + Math.sin(T * 1.5) * 4, fin, fin.props, false, 1.05);
     txt('SLUTBOSS: ' + fin.name, 180, y + 10, 15, INK, 'left', null);
-    ctx.fillStyle = '#fff'; ctx.strokeStyle = INK; ctx.lineWidth = 2.5; rr(176, y + 24, 304, 54, 12); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#2a1c44'; ctx.strokeStyle = '#c77dff'; ctx.lineWidth = 2.5; rr(176, y + 24, 304, 54, 12); ctx.fill(); ctx.stroke();
     para('"' + fin.taunt + '"', 188, y + 42, 282, 13, '#5a3a1a');
     para('Kuriosa: ' + fin.fact, 180, y + 94, 300, 12, '#8a6a3a');
     btn(120, 778, 300, 66, 'TILL STRID!', '#3fbf5a', closeModal, { size: 24 });
@@ -2137,8 +2283,8 @@ function drawModal(m) {
     txt(tip.title, W / 2, 358, 22, INK, 'center', null);
     let y = para(tip.text, W / 2, 392, 400, 16, INK, 'center');
     para('(' + tip.joke + ')', W / 2, y + 8, 400, 13, '#8a6a3a', 'center');
-    txt('BRA KANINER MOT DEN', W / 2, 548, 14, '#2f9e44', 'center', null);
-    rabbitRow(tip.good, 604);
+    txt('BRA TORN MOT DEN', W / 2, 548, 14, '#2f9e44', 'center', null);
+    towerRow(tip.good, 604);
     btn(130, 700, 280, 64, 'UPPFATTAT!', '#3fbf5a', closeModal, { size: 22 });
   } else if (m.kind === 'boss') {
     const b = BOSSES[m.key];
@@ -2149,17 +2295,17 @@ function drawModal(m) {
     let y = 392;
     for (const line of bossTraits(b)) { txt('• ' + line, 72, y, 15, INK, 'left', null); y += 26; }
     txt('Bossbonus: ¢ ' + b.gold, 72, y + 6, 15, '#8a5a00', 'left', null);
-    txt('BRA KANINER MOT BOSSEN', W / 2, y + 46, 14, '#2f9e44', 'center', null);
-    rabbitRow(bossCounters(b), y + 100);
+    txt('BRA TORN MOT BOSSEN', W / 2, y + 46, 14, '#2f9e44', 'center', null);
+    towerRow(bossCounters(b), y + 100);
     btn(130, 720, 280, 64, 'JAG ÄR REDO!', '#3fbf5a', closeModal, { size: 22 });
   } else if (m.kind === 'unlock') {
-    const R = RABBITS[m.i];
+    const R = TOWERS[m.i];
     card(50, 200, 440, 520, '#fff3d6', 22);
-    txt('NY KANINVÄKTARE!', W / 2, 244, 28, '#3fbf5a');
-    drawRabbit(m.i, W / 2, 350 - Math.abs(Math.sin(T * 4)) * 14, -.5, 0, 1, 2.2, { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 5) * .12, blink: (T % 3) < .15 });
+    txt('NYTT TORN!', W / 2, 244, 28, '#3fbf5a');
+    drawTower(m.i, W / 2, 350 - Math.abs(Math.sin(T * 4)) * 14, -.5, 0, 1, 2.2, { lift: 0, sx: 1, sy: 1, ear: Math.sin(T * 5) * .12, blink: (T % 3) < .15 });
     txt(R.name, W / 2, 450, 24, INK, 'center', null);
     let y = para(R.desc, W / 2, 486, 360, 15, '#5a3a1a', 'center');
-    para(m.boss.short + ' tappade den när ballongen sprack. Nu är den din!', W / 2, y + 12, 360, 13, '#8a6a3a', 'center');
+    para(m.boss.short + ' tappade ritningen när ballongen sprack. Nu är den din!', W / 2, y + 12, 360, 13, '#8a6a3a', 'center');
     txt('Max ' + R.max + ' st per bana', W / 2, y + 60, 13, '#2f7d32', 'center', null);
     btn(130, 630, 280, 64, 'VÄLKOMMEN!', '#3fbf5a', closeModal, { size: 22 });
   }
@@ -2172,7 +2318,7 @@ function drawOverlayBase(title, color) {
 }
 function drawPause() {
   drawOverlayBase('PAUSAD', '#4d8dff');
-  txt('Kaninerna tar en morotspaus. Spelet sparas efter varje våg.', W / 2, 240, 13, '#8a6a3a', 'center', null);
+  txt('Ingenjörerna tar en fikapaus. Spelet sparas efter varje våg.', W / 2, 240, 13, '#8a6a3a', 'center', null);
   const nb = nextBoss();
   btn(110, 270, 320, 66, 'FORTSÄTT', '#3fbf5a', () => { g.paused = false; }, { size: 22 });
   btn(110, 350, 320, 66, 'NÄSTA BOSS', '#c0713a', () => { g.paused = false; if (nb) g.modals.push({ kind: 'boss', key: nb.key }); }, { size: 22, disabled: !nb });
@@ -2183,22 +2329,22 @@ function drawPause() {
 }
 function drawEnd() {
   const win = endInfo.win, fin = BOSSES[g.def.bosses[g.total]];
-  drawOverlayBase(win ? g.def.name + ' RÄDDAD!' : 'MORÖTTERNA ÄR SLUT!', win ? '#3fbf5a' : '#ff5a5a');
+  drawOverlayBase(win ? g.def.name + ' RÄDDAD!' : 'KRISTALLERNA ÄR SLUT!', win ? '#3fbf5a' : '#ff5a5a');
   let y = 240;
   if (win) {
     for (let s = 0; s < 3; s++) {
       const on = s < endInfo.stars, sz = on ? 62 + Math.sin(T * 4 + s) * 4 : 62;
       txt('★', W / 2 + (s - 1) * 70, y + 20, sz, on ? '#ffd23b' : '#d9cdb0');
     }
-    txt(g.lives + ' morötter kvar efter ' + g.total + ' vågor', W / 2, y + 66, 16, '#8a5a2b', 'center', null);
+    txt(g.lives + ' kristaller kvar efter ' + g.total + ' vågor', W / 2, y + 66, 16, '#8a5a2b', 'center', null);
     drawBossBalloon(W / 2, y + 170, fin, {}, false, 1.1);
     y = para('"' + fin.defeat + '" – ' + fin.short, W / 2, y + 250, 360, 14, '#8a6a3a', 'center') + 10;
-    if (g.lv === LEVELS.length - 1) { y = para('Guldmoroten är räddad och skogen är grön igen. Grattis, kaninväktare!', W / 2, y + 10, 380, 17, INK, 'center') + 10; }
+    if (g.lv === LEVELS.length - 1) { y = para('Månkristallen är räddad och staden lyser igen. Grattis, kristallväktare!', W / 2, y + 10, 380, 17, INK, 'center') + 10; }
   } else {
     const b = g.lastBoss;
     txt('Du kom till våg ' + g.wave + ' av ' + g.total, W / 2, y + 4, 16, '#8a5a2b', 'center', null);
     drawBossBalloon(W / 2, y + 90 + Math.sin(T * 2) * 4, b, {}, false, 1.1);
-    ctx.fillStyle = '#fff'; ctx.strokeStyle = INK; ctx.lineWidth = 2.5; rr(W / 2 + 40, y + 24, 170, 46, 12); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#2a1c44'; ctx.strokeStyle = '#c77dff'; ctx.lineWidth = 2.5; rr(W / 2 + 40, y + 24, 170, 46, 12); ctx.fill(); ctx.stroke();
     para(b.win, W / 2 + 125, y + 40, 150, 13, INK, 'center');
     txt('TIPS', W / 2, y + 170, 16, '#c2410c', 'center', null);
     y = para(endInfo.tip, W / 2, y + 198, 360, 16, INK, 'center') + 10;
@@ -2207,7 +2353,7 @@ function drawEnd() {
   const toMenu = () => { scene = 'menu'; g = null; };
   if (!win) {
     // a lost game is over: the run is gone and the player goes back to the map
-    txt('Kaninerna har packat ihop. Börja om från våg 1!', W / 2, y, 13, '#8a6a3a', 'center', null);
+    txt('Staden har slocknat. Börja om från våg 1!', W / 2, y, 13, '#8a6a3a', 'center', null);
     btn(110, y + 30, 320, 70, 'TILL MENYN', '#4d8dff', toMenu, { size: 23 });
     return;
   }
@@ -2250,7 +2396,7 @@ function tapGrid(x, y) {
   const t = g.towers.find(t => t.c === c && t.r === r);
   if (t) { g.sel = t; g.armed = -1; t.hop = .4; sfx(520, .05); return; }
   if (g.armed < 0) { g.sel = null; return; }
-  const R = RABBITS[g.armed];
+  const R = TOWERS[g.armed];
   if (!canBuild(c, r)) { sfx(150, .1, 'sawtooth'); return; }
   if (countOf(g.armed) >= R.max) {
     pop(x, y, 'MAX ' + R.max + ' ' + R.short + '!', '#ff8a8a'); sfx(150, .12, 'sawtooth');
@@ -2293,7 +2439,7 @@ addEventListener('keydown', e => {
   else if (k === 'f' || k === 'F') g.speed = g.speed % 3 + 1;
   else if (k === 'q' || k === 'Q') cast('q');
   else if (k === 'r' || k === 'R') cast('r');
-  else if (k >= '1' && k <= '6' && rabbitUnlocked(+k - 1)) { g.armed = +k - 1; g.sel = null; g.moving = null; }
+  else if (k >= '1' && k <= '6' && towerUnlocked(+k - 1)) { g.armed = +k - 1; g.sel = null; g.moving = null; }
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden && scene === 'play' && g && !g.result) g.paused = true; });
 
@@ -2303,7 +2449,7 @@ function frame(now) {
   const dt = Math.min(.05, (now - last) / 1000); last = now; T += dt;
   update(dt);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = '#2b6a2f'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = '#0e0818'; ctx.fillRect(0, 0, cv.width, cv.height);
   ctx.setTransform(sc * dpr, 0, 0, sc * dpr, ox * dpr, oy * dpr);
   ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
   btns.length = 0;
